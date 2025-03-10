@@ -18,7 +18,8 @@ with DAG(
     download_and_split_video = BashOperator(
         task_id='download_and_split_video',
         bash_command='download_and_split.sh',
-        env={'VIDEO_ID': '6TlUsYH0UI4'},
+        env={'VIDEO_ID': 'iLRZi0Gu8Go'},
+        append_env=True,
         cwd='{{ dag_run.dag.folder }}'
     )
 
