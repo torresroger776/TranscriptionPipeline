@@ -9,6 +9,8 @@ default_args = {
     'retry_delay': timedelta(minutes=5)
 }
 
+video_id = '{{ dag_run.conf["video_id"] }}'
+
 with DAG(
     'transcription_data_pipeline',
     default_args=default_args,
@@ -19,17 +21,23 @@ with DAG(
     download_and_split_video = BashOperator(
         task_id='download_and_split_video',
         bash_command='download_and_split.sh',
-        env={'VIDEO_ID': '{{dag_run.conf["video_id"]}}'},
+        env={'VIDEO_ID': video_id},
         append_env=True,
-        cwd='{{ dag_run.dag.folder }}'
+        cwd='/opt/airflow/'
     )
 
     store_audio_in_gcs = LocalFilesystemToGCSOperator(
         task_id='store_audio_in_gcs',
-        src='{{ dag_run.dag.folder }}/{{dag_run.conf["video_id"]}}/*',
-        dst='audio_files/{{dag_run.conf["video_id"]}}/',
+        src=f'/opt/airflow/{video_id}/*',
+        dst=f'audio_files/{video_id}/',
         bucket='transcription-project-store',
         gcp_conn_id='google_cloud_default'
     )
 
-    download_and_split_video >> store_audio_in_gcs
+    cleanup_files = BashOperator(
+        task_id='cleanup_files',
+        bash_command=f'rm -rf /opt/airflow/{video_id}',
+        cwd='/opt/airflow/'
+    )
+
+    download_and_split_video >> store_audio_in_gcs >> cleanup_files
