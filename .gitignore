@@ -1,0 +1,10 @@
+*
+
+!*.*
+!lambda/
+!lambda/*
+
+lambda/*.zip
+lambda/YtdlpFfmpegLayer/
+lambda/YtdlpFfmpegLayer/*
+.env
