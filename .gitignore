@@ -1,4 +1,11 @@
 *
 
+!cloudformation/
+!cloudformation/project_cf_template.json
+!lambda/
+!lambda/ProcessTranscriptionJob/
+!lambda/ProcessTranscriptionJob/index.py
 !.gitignore
 !README.md
+!setup.sh
+!test.py

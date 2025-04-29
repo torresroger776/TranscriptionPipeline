@@ -1,0 +1,144 @@
+{
+    "Parameters": {
+        "LambdaS3Bucket": {
+            "Type": "String"
+        },
+        "LambdaS3Key": {
+            "Type": "String"
+        }
+    },
+    "Resources": {
+        "TranscriptionQueue": {
+            "Type": "AWS::SQS::Queue",
+            "Properties": {
+                "QueueName": "transcription-jobs",
+                "VisibilityTimeout": 900
+            }
+        },
+        "LambdaExecutionRole": {
+            "Type": "AWS::IAM::Role",
+            "Properties": {
+                "AssumeRolePolicyDocument": {
+                    "Version": "2012-10-17",
+                    "Statement": [
+                        {
+                            "Effect": "Allow",
+                            "Principal": { "Service": "lambda.amazonaws.com" },
+                            "Action": "sts:AssumeRole"
+                        }
+                    ]
+                },
+                "Policies": [
+                    {
+                        "PolicyName": "SQSSendPolicy",
+                        "PolicyDocument": {
+                            "Version": "2012-10-17",
+                            "Statement": [
+                                {
+                                    "Effect": "Allow",
+                                    "Action": [
+                                        "sqs:SendMessage"
+                                    ],
+                                    "Resource": { "Fn::GetAtt": ["TranscriptionQueue", "Arn"] }
+                                },
+                                {
+                                    "Effect": "Allow",
+                                    "Action": [
+                                        "logs:CreateLogGroup",
+                                        "logs:CreateLogStream",
+                                        "logs:PutLogEvents"
+                                    ],
+                                    "Resource": "*"
+                                }
+                            ]
+                        }
+                    }
+                ]
+            }
+        },
+        "ProcessLambdaFunction": {
+            "Type": "AWS::Lambda::Function",
+            "Properties": {
+                "FunctionName": "ProcessTranscriptionJob",
+                "Runtime": "python3.11",
+                "Handler": "index.handler",
+                "Role": { "Fn::GetAtt": ["LambdaExecutionRole", "Arn"] },
+                "Timeout": 10,
+                "Code": {
+                    "S3Bucket": { "Ref": "LambdaS3Bucket" },
+                    "S3Key": { "Ref": "LambdaS3Key" }
+                },
+                "Environment": {
+                    "Variables": {
+                        "QUEUE_URL": { "Ref": "TranscriptionQueue" }
+                    }
+                }
+            }
+        },
+        "API": {
+            "Type": "AWS::ApiGateway::RestApi",
+            "Properties": {
+                "Name": "TranscriptionAPI",
+                "EndpointConfiguration": {
+                    "Types": ["REGIONAL"]
+                }
+            }
+        },
+        "APIResource": {
+            "Type": "AWS::ApiGateway::Resource",
+            "Properties": {
+                "RestApiId": { "Ref": "API" },
+                "ParentId": { "Fn::GetAtt": ["API", "RootResourceId"] },
+                "PathPart": "submit"
+            }
+        },
+        "APIMethod": {
+            "Type": "AWS::ApiGateway::Method",
+            "Properties": {
+                "RestApiId": { "Ref": "API" },
+                "ResourceId": { "Ref": "APIResource" },
+                "HttpMethod": "POST",
+                "AuthorizationType": "AWS_IAM",
+                "Integration": {
+                    "Type": "AWS_PROXY",
+                    "IntegrationHttpMethod": "POST",
+                    "Uri": {
+                        "Fn::Sub": [
+                            "arn:aws:apigateway:${AWS::Region}:lambda:path/2015-03-31/functions/${LambdaArn}/invocations",
+                            {
+                                "LambdaArn": { "Fn::GetAtt": ["ProcessLambdaFunction", "Arn"] }
+                            }
+                        ]
+                    }
+                }
+            }
+        },
+        "ApiDeployment": {
+            "Type": "AWS::ApiGateway::Deployment",
+            "DependsOn": ["APIMethod"],
+            "Properties": {
+                "RestApiId": { "Ref": "API" },
+                "StageName": "prod"
+            }
+        },
+        "LambdaInvokePermission": {
+            "Type": "AWS::Lambda::Permission",
+            "Properties": {
+                "FunctionName": { "Ref": "ProcessLambdaFunction" },
+                "Action": "lambda:InvokeFunction",
+                "Principal": "apigateway.amazonaws.com",
+                "SourceArn": {
+                    "Fn::Sub": "arn:aws:execute-api:${AWS::Region}:${AWS::AccountId}:${API}/*/POST/submit"
+                }
+            }
+        }
+    },
+    "Outputs": {
+        "APIInvokeURL": {
+            "Description": "Invoke this URL to submit a job",
+            "Value": {
+                "Fn::Sub": "https://${API}.execute-api.${AWS::Region}.amazonaws.com/prod/submit"
+            }
+        }
+    }
+}  
