@@ -1,13 +1,26 @@
 {
     "Parameters": {
-        "LambdaS3Bucket": {
-            "Type": "String"
+        "S3Bucket": {
+            "Type": "String",
+            "Description": "The name of the S3 bucket to store files"
         },
-        "LambdaS3Key": {
-            "Type": "String"
+        "DownloadWorkerImage": {
+            "Type": "String",
+            "Description": "ECR image URL for the download worker"
+        },
+        "SubnetId": {
+            "Type": "AWS::EC2::Subnet::Id",
+            "Description": "Subnet ID for the ECS cluster"
         }
     },
     "Resources": {
+        "DownloadQueue": {
+            "Type": "AWS::SQS::Queue",
+            "Properties": {
+                "QueueName": "download-jobs",
+                "VisibilityTimeout": 900
+            }
+        },
         "TranscriptionQueue": {
             "Type": "AWS::SQS::Queue",
             "Properties": {
@@ -15,7 +28,7 @@
                 "VisibilityTimeout": 900
             }
         },
-        "LambdaExecutionRole": {
+        "ApiGatewayRole": {
             "Type": "AWS::IAM::Role",
             "Properties": {
                 "AssumeRolePolicyDocument": {
@@ -23,56 +36,30 @@
                     "Statement": [
                         {
                             "Effect": "Allow",
-                            "Principal": { "Service": "lambda.amazonaws.com" },
+                            "Principal": {
+                                "Service": "apigateway.amazonaws.com"
+                            },
                             "Action": "sts:AssumeRole"
                         }
                     ]
                 },
                 "Policies": [
                     {
-                        "PolicyName": "SQSSendPolicy",
+                        "PolicyName": "AllowSqsSend",
                         "PolicyDocument": {
                             "Version": "2012-10-17",
                             "Statement": [
                                 {
                                     "Effect": "Allow",
-                                    "Action": [
-                                        "sqs:SendMessage"
-                                    ],
-                                    "Resource": { "Fn::GetAtt": ["TranscriptionQueue", "Arn"] }
-                                },
-                                {
-                                    "Effect": "Allow",
-                                    "Action": [
-                                        "logs:CreateLogGroup",
-                                        "logs:CreateLogStream",
-                                        "logs:PutLogEvents"
-                                    ],
-                                    "Resource": "*"
+                                    "Action": "sqs:SendMessage",
+                                    "Resource": {
+                                        "Fn::GetAtt": ["DownloadQueue", "Arn"]
+                                    }
                                 }
                             ]
                         }
                     }
                 ]
-            }
-        },
-        "ProcessLambdaFunction": {
-            "Type": "AWS::Lambda::Function",
-            "Properties": {
-                "FunctionName": "ProcessTranscriptionJob",
-                "Runtime": "python3.11",
-                "Handler": "index.handler",
-                "Role": { "Fn::GetAtt": ["LambdaExecutionRole", "Arn"] },
-                "Timeout": 10,
-                "Code": {
-                    "S3Bucket": { "Ref": "LambdaS3Bucket" },
-                    "S3Key": { "Ref": "LambdaS3Key" }
-                },
-                "Environment": {
-                    "Variables": {
-                        "QUEUE_URL": { "Ref": "TranscriptionQueue" }
-                    }
-                }
             }
         },
         "API": {
@@ -100,17 +87,57 @@
                 "HttpMethod": "POST",
                 "AuthorizationType": "AWS_IAM",
                 "Integration": {
-                    "Type": "AWS_PROXY",
+                    "Type": "AWS",
                     "IntegrationHttpMethod": "POST",
                     "Uri": {
-                        "Fn::Sub": [
-                            "arn:aws:apigateway:${AWS::Region}:lambda:path/2015-03-31/functions/${LambdaArn}/invocations",
-                            {
-                                "LambdaArn": { "Fn::GetAtt": ["ProcessLambdaFunction", "Arn"] }
+                        "Fn::Sub": "arn:aws:apigateway:${AWS::Region}:sqs:path/${AWS::AccountId}/${DownloadQueue.QueueName}"
+                    },
+                    "Credentials": {
+                        "Fn::GetAtt": ["ApiGatewayRole", "Arn"]
+                    },
+                    "RequestParameters": {
+                        "integration.request.header.Content-Type": "'application/x-www-form-urlencoded'"
+                    },
+                    "RequestTemplates": {
+                        "application/json": {
+                        "Fn::Sub": "Action=SendMessage&MessageBody=$util.urlEncode($input.body)"
+                        }
+                    },
+                    "PassthroughBehavior": "NEVER",
+                    "IntegrationResponses": [
+                        {
+                            "StatusCode": "200",
+                            "ResponseTemplates": {
+                                "application/json": "{ \"message\": \"Download job submitted successfully\" }"
                             }
-                        ]
+                        },
+                        {
+                            "StatusCode": "400",
+                            "SelectionPattern": "4\\d{2}",
+                            "ResponseTemplates": {
+                              "application/json": "{ \"error\": \"Bad request\" }"
+                            }
+                        },
+                        {
+                            "StatusCode": "500",
+                            "SelectionPattern": "5\\d{2}",
+                            "ResponseTemplates": {
+                              "application/json": "{ \"error\": \"Internal server error while sending message to SQS\" }"
+                            }
+                        }
+                    ]
+                },
+                "MethodResponses": [
+                    {
+                        "StatusCode": "200"
+                    },
+                    {
+                        "StatusCode": "400"
+                    },
+                    {
+                        "StatusCode": "500"
                     }
-                }
+                ]
             }
         },
         "ApiDeployment": {
@@ -121,15 +148,169 @@
                 "StageName": "prod"
             }
         },
-        "LambdaInvokePermission": {
-            "Type": "AWS::Lambda::Permission",
+        "DownloadWorkerCluster": {
+            "Type": "AWS::ECS::Cluster",
             "Properties": {
-                "FunctionName": { "Ref": "ProcessLambdaFunction" },
-                "Action": "lambda:InvokeFunction",
-                "Principal": "apigateway.amazonaws.com",
-                "SourceArn": {
-                    "Fn::Sub": "arn:aws:execute-api:${AWS::Region}:${AWS::AccountId}:${API}/*/POST/submit"
+                "ClusterName": "DownloadWorkerCluster"
+            }
+        },
+        "DownloadWorkerTaskExecutionRole": {
+            "Type": "AWS::IAM::Role",
+            "Properties": {
+                "AssumeRolePolicyDocument": {
+                    "Version": "2012-10-17",
+                    "Statement": [
+                        {
+                            "Effect": "Allow",
+                            "Principal": { "Service": "ecs-tasks.amazonaws.com" },
+                            "Action": "sts:AssumeRole"
+                        }
+                    ]
+                },
+                "ManagedPolicyArns": [
+                    "arn:aws:iam::aws:policy/service-role/AmazonECSTaskExecutionRolePolicy"
+                ]
+            }
+        },
+        "DownloadWorkerTaskRole": {
+            "Type": "AWS::IAM::Role",
+            "Properties": {
+                "AssumeRolePolicyDocument": {
+                    "Version": "2012-10-17",
+                    "Statement": [
+                        {
+                            "Effect": "Allow",
+                            "Principal": { "Service": "ecs-tasks.amazonaws.com" },
+                            "Action": "sts:AssumeRole"
+                        }
+                    ]
+                },
+                "Policies": [
+                    {
+                        "PolicyName": "DownloadWorkerPermissions",
+                        "PolicyDocument": {
+                            "Version": "2012-10-17",
+                            "Statement": [
+                                {
+                                    "Effect": "Allow",
+                                    "Action": [
+                                        "s3:PutObject",
+                                        "s3:GetObject",
+                                        "s3:ListBucket"
+                                    ],
+                                    "Resource": [
+                                        { "Fn::Sub": "arn:aws:s3:::${S3Bucket}" },
+                                        { "Fn::Sub": "arn:aws:s3:::${S3Bucket}/*" }
+                                    ]
+                                },
+                                {
+                                    "Effect": "Allow",
+                                    "Action": [
+                                        "sqs:ReceiveMessage",
+                                        "sqs:DeleteMessage",
+                                        "sqs:GetQueueAttributes",
+                                        "sqs:SendMessage"
+                                    ],
+                                    "Resource": "*"
+                                }
+                            ]
+                        }
+                    }
+                ]
+            }
+        },
+        "DownloadWorkerTaskDefinition": {
+            "Type": "AWS::ECS::TaskDefinition",
+            "Properties": {
+                "Family": "DownloadWorkerTask",
+                "RequiresCompatibilities": ["EC2"],
+                "Cpu": "256",
+                "Memory": "512",
+                "ExecutionRoleArn": { "Ref": "DownloadWorkerTaskExecutionRole" },
+                "TaskRoleArn": { "Ref": "DownloadWorkerTaskRole" },
+                "ContainerDefinitions": [
+                    {
+                        "Name": "download-worker",
+                        "Image": { "Ref": "DownloadWorkerImage" },
+                        "Essential": true,
+                        "Environment": [
+                            { "Name": "BUCKET_NAME", "Value": { "Ref": "S3Bucket" } },
+                            { "Name": "AWS_REGION", "Value": { "Ref": "AWS::Region" } },
+                            { "Name": "DOWNLOAD_QUEUE_URL", "Value": { "Ref": "DownloadQueue" } },
+                            { "Name": "TRANSCRIPTION_QUEUE_URL", "Value": { "Ref": "TranscriptionQueue" } }
+                        ]
+                    }
+                ]
+            }
+        },
+        "DownloadWorkerAutoScalingGroup": {
+            "Type": "AWS::AutoScaling::AutoScalingGroup",
+            "Properties": {
+                "MinSize": "1",
+                "MaxSize": "1",
+                "DesiredCapacity": "1",
+                "LaunchTemplate": {
+                    "LaunchTemplateId": { "Ref": "DownloadWorkerLaunchTemplate" },
+                    "Version": { "Fn::GetAtt": ["DownloadWorkerLaunchTemplate", "LatestVersionNumber"] }
+                },
+                "VPCZoneIdentifier": [{ "Ref": "SubnetId" }]
+            }
+        },
+        "DownloadWorkerLaunchTemplate": {
+            "Type": "AWS::EC2::LaunchTemplate",
+            "Properties": {
+                "LaunchTemplateName": "DownloadWorkerLaunchTemplate",
+                "LaunchTemplateData": {
+                    "InstanceType": "t3.micro",
+                    "IamInstanceProfile": {
+                        "Name": { "Ref": "DownloadWorkerInstanceProfile" }
+                    },
+                    "ImageId": {
+                        "Fn::Sub": "{{resolve:ssm:/aws/service/ecs/optimized-ami/amazon-linux-2023/recommended/image_id}}"
+                    },
+                    "UserData": {
+                        "Fn::Base64": {
+                            "Fn::Sub": "#!/bin/bash\necho ECS_CLUSTER=${DownloadWorkerCluster} >> /etc/ecs/ecs.config"
+                        }
+                    }
                 }
+            }
+        },
+        "DownloadWorkerInstanceRole": {
+            "Type": "AWS::IAM::Role",
+            "Properties": {
+                "AssumeRolePolicyDocument": {
+                    "Version": "2012-10-17",
+                    "Statement": [
+                        {
+                            "Effect": "Allow",
+                            "Principal": {
+                                "Service": "ec2.amazonaws.com"
+                            },
+                            "Action": "sts:AssumeRole"
+                        }
+                    ]
+                },
+                "ManagedPolicyArns": [
+                    "arn:aws:iam::aws:policy/service-role/AmazonEC2ContainerServiceforEC2Role",
+                    "arn:aws:iam::aws:policy/AmazonSSMManagedInstanceCore"
+                ]
+            }
+        },
+        "DownloadWorkerInstanceProfile": {
+            "Type": "AWS::IAM::InstanceProfile",
+            "Properties": {
+                "Roles": [{ "Ref": "DownloadWorkerInstanceRole" }]
+            }
+        },
+        "DownloadWorkerService": {
+            "Type": "AWS::ECS::Service",
+            "DependsOn": ["DownloadWorkerAutoScalingGroup"],
+            "Properties": {
+                "Cluster": { "Ref": "DownloadWorkerCluster" },
+                "DesiredCount": 1,
+                "LaunchType": "EC2",
+                "TaskDefinition": { "Ref": "DownloadWorkerTaskDefinition" }
             }
         }
     },

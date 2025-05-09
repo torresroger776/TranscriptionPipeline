@@ -2,9 +2,10 @@
 
 !cloudformation/
 !cloudformation/project_cf_template.json
-!lambda/
-!lambda/ProcessTranscriptionJob/
-!lambda/ProcessTranscriptionJob/index.py
+!download_worker/
+!download_worker/download_worker.py
+!download_worker/requirements.txt
+!download_worker/Dockerfile
 !.gitignore
 !README.md
 !setup.sh

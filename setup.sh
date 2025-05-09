@@ -1,37 +1,62 @@
 #!/usr/bin/env bash
 
-set =e
+set -e
 
 # check if .env exists
 if [ ! -f .env ]; then
   touch .env
 fi
+
+# activate .env variables
 source .env
 
 # create bucket name if not set
-if [ -z "$BUCKET_NAME" ]; then
-  BUCKET_NAME="transcription-bucket-$(uuidgen | tr '[:upper:]' '[:lower:]')"
+if [ -z $BUCKET_NAME ]; then
+  BUCKET_NAME=transcription-bucket-$(uuidgen | tr '[:upper:]' '[:lower:]')
   echo "BUCKET_NAME=$BUCKET_NAME" >> .env
 fi
 
-STACK_NAME="transcription-pipeline-stack"
-TEMPLATE_FILE="cloudformation/project_cf_template.json"
-LAMBDA_DIR="lambda"
-LAMBDA_NAME="ProcessTranscriptionJob"
+# get AWS region from configuration
+AWS_REGION=$(aws configure get region)
+
+# CloudFormation parameters
+STACK_NAME=transcription-pipeline-stack
+TEMPLATE_FILE=cloudformation/project_cf_template.json
+
+# ECR repository details
+DOWNLOAD_REPOSITORY_NAME=download-worker
+TRANSCRIPTION_REPOSITORY_NAME=transcription-worker
+IMAGE_TAG=latest
+ACCOUNT_ID=$(aws sts get-caller-identity --query "Account" --output text)
+ECR_URI=$ACCOUNT_ID.dkr.ecr.$AWS_REGION.amazonaws.com
+DOWNLOAD_REPOSITORY_URI=$ECR_URI/$DOWNLOAD_REPOSITORY_NAME
+TRANSCRIPTION_REPOSITORY_URI=$ECR_URI/$TRANSCRIPTION_REPOSITORY_NAME
 
 # create S3 bucket if it doesn't exist
-if ! aws s3api head-bucket --bucket "$BUCKET_NAME"; then
-    aws s3api create-bucket --bucket "$BUCKET_NAME"
+if ! aws s3api head-bucket --bucket $BUCKET_NAME; then
+    aws s3api create-bucket --bucket $BUCKET_NAME
 fi
 
-# zip lambda code
-cd "$LAMBDA_DIR/$LAMBDA_NAME"
-rm -f "../$LAMBDA_NAME.zip"
-zip -r "../$LAMBDA_NAME.zip" .
-cd ../..
+# authenticate to ECR
+aws ecr get-login-password | docker login --username AWS --password-stdin $ECR_URI
 
-# upload lambda code to S3 bucket
-aws s3 cp $LAMBDA_DIR/$LAMBDA_NAME.zip s3://$BUCKET_NAME/$LAMBDA_DIR/
+# create download worker ECR repository if it doesn't exist
+if ! aws ecr describe-repositories --repository-names $DOWNLOAD_REPOSITORY_NAME > /dev/null 2>&1; then
+    aws ecr create-repository --repository-name $DOWNLOAD_REPOSITORY_NAME > /dev/null 2>&1
+else
+    echo "ECR repository $DOWNLOAD_REPOSITORY_NAME already exists"
+fi
+
+# build and push download worker image
+docker build -t $DOWNLOAD_REPOSITORY_NAME download_worker
+docker tag $DOWNLOAD_REPOSITORY_NAME:$IMAGE_TAG $DOWNLOAD_REPOSITORY_URI:$IMAGE_TAG
+docker push $DOWNLOAD_REPOSITORY_URI:$IMAGE_TAG
+
+# find subnet id
+DEFAULT_SUBNET_ID=$(aws ec2 describe-subnets \
+  --filters "Name=default-for-az,Values=true" \
+  --query "Subnets[0].SubnetId" \
+  --output text)
 
 # deploy stack
 aws cloudformation deploy \
@@ -39,14 +64,9 @@ aws cloudformation deploy \
   --template-file $TEMPLATE_FILE \
   --capabilities CAPABILITY_NAMED_IAM \
   --parameter-overrides \
-      LambdaS3Bucket=$BUCKET_NAME \
-      LambdaS3Key=$LAMBDA_DIR/$LAMBDA_NAME.zip
-
-# update lambda code
-aws lambda update-function-code \
-  --function-name $LAMBDA_NAME \
-  --s3-bucket $BUCKET_NAME \
-  --s3-key $LAMBDA_DIR/$LAMBDA_NAME.zip > /dev/null
+      S3Bucket=$BUCKET_NAME \
+      DownloadWorkerImage=$DOWNLOAD_REPOSITORY_URI:$IMAGE_TAG \
+      SubnetId=$DEFAULT_SUBNET_ID
 
 # get api invoke URL
 API_INVOKE_URL=$(aws cloudformation describe-stacks --stack-name $STACK_NAME \
