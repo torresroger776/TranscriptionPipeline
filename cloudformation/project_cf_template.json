@@ -272,6 +272,13 @@
                         "Fn::Base64": {
                             "Fn::Sub": "#!/bin/bash\necho ECS_CLUSTER=${DownloadWorkerCluster} >> /etc/ecs/ecs.config"
                         }
+                    },
+                    "InstanceMarketOptions": {
+                        "MarketType": "spot",
+                        "SpotOptions": {
+                            "SpotInstanceType": "one-time",
+                            "InstanceInterruptionBehavior": "terminate"
+                        }
                     }
                 }
             }

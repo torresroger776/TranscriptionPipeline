@@ -30,7 +30,6 @@ IMAGE_TAG=latest
 ACCOUNT_ID=$(aws sts get-caller-identity --query "Account" --output text)
 ECR_URI=$ACCOUNT_ID.dkr.ecr.$AWS_REGION.amazonaws.com
 DOWNLOAD_REPOSITORY_URI=$ECR_URI/$DOWNLOAD_REPOSITORY_NAME
-TRANSCRIPTION_REPOSITORY_URI=$ECR_URI/$TRANSCRIPTION_REPOSITORY_NAME
 
 # create S3 bucket if it doesn't exist
 if ! aws s3api head-bucket --bucket $BUCKET_NAME; then
@@ -45,6 +44,18 @@ if ! aws ecr describe-repositories --repository-names $DOWNLOAD_REPOSITORY_NAME 
     aws ecr create-repository --repository-name $DOWNLOAD_REPOSITORY_NAME > /dev/null 2>&1
 else
     echo "ECR repository $DOWNLOAD_REPOSITORY_NAME already exists"
+fi
+
+# delete old download worker image
+OLD_DOWNLOAD_DIGEST=$(aws ecr describe-images \
+  --repository-name $DOWNLOAD_REPOSITORY_NAME \
+  --query "imageDetails[?contains(imageTags, \`$IMAGE_TAG\`)].imageDigest" \
+  --output text)
+
+if [ -n $OLD_DOWNLOAD_DIGEST ]; then
+  aws ecr batch-delete-image \
+    --repository-name $DOWNLOAD_REPOSITORY_NAME \
+    --image-ids imageDigest=$OLD_DOWNLOAD_DIGEST
 fi
 
 # build and push download worker image
