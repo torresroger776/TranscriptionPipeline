@@ -6,6 +6,9 @@
 !download_worker/download_worker.py
 !download_worker/requirements.txt
 !download_worker/Dockerfile
+!transcription_lambda
+!transcription_lambda/app.py
+!transcription_lambda/Dockerfile
 !.gitignore
 !README.md
 !setup.sh

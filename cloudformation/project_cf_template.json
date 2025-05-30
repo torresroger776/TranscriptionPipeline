@@ -4,13 +4,21 @@
             "Type": "String",
             "Description": "The name of the S3 bucket to store files"
         },
+        "SubnetId": {
+            "Type": "AWS::EC2::Subnet::Id",
+            "Description": "Subnet ID for the ECS cluster"
+        },
         "DownloadWorkerImage": {
             "Type": "String",
             "Description": "ECR image URL for the download worker"
         },
-        "SubnetId": {
-            "Type": "AWS::EC2::Subnet::Id",
-            "Description": "Subnet ID for the ECS cluster"
+        "TranscriptionLambdaImage": {
+            "Type": "String",
+            "Description": "ECR image URL for the transcription lambda"
+        },
+        "WhisperModelPath": {
+            "Type": "String",
+            "Description": "Path to the Whisper model in transcription lambda directory"
         }
     },
     "Resources": {
@@ -18,13 +26,6 @@
             "Type": "AWS::SQS::Queue",
             "Properties": {
                 "QueueName": "download-jobs",
-                "VisibilityTimeout": 900
-            }
-        },
-        "TranscriptionQueue": {
-            "Type": "AWS::SQS::Queue",
-            "Properties": {
-                "QueueName": "transcription-jobs",
                 "VisibilityTimeout": 900
             }
         },
@@ -148,13 +149,13 @@
                 "StageName": "prod"
             }
         },
-        "DownloadWorkerCluster": {
+        "ECSCluster": {
             "Type": "AWS::ECS::Cluster",
             "Properties": {
-                "ClusterName": "DownloadWorkerCluster"
+                "ClusterName": "ECSCluster"
             }
         },
-        "DownloadWorkerTaskExecutionRole": {
+        "ECSTaskExecutionRole": {
             "Type": "AWS::IAM::Role",
             "Properties": {
                 "AssumeRolePolicyDocument": {
@@ -172,7 +173,7 @@
                 ]
             }
         },
-        "DownloadWorkerTaskRole": {
+        "ECSTaskRole": {
             "Type": "AWS::IAM::Role",
             "Properties": {
                 "AssumeRolePolicyDocument": {
@@ -211,12 +212,21 @@
                                         "sqs:GetQueueAttributes",
                                         "sqs:SendMessage"
                                     ],
-                                    "Resource": "*"
+                                    "Resource": [
+                                        { "Fn::GetAtt": ["DownloadQueue", "Arn"] }
+                                    ]
                                 }
                             ]
                         }
                     }
                 ]
+            }
+        },
+        "DownloadWorkerLogGroup": {
+            "Type": "AWS::Logs::LogGroup",
+            "Properties": {
+                "LogGroupName": "/ecs/download-worker",
+                "RetentionInDays": 1
             }
         },
         "DownloadWorkerTaskDefinition": {
@@ -226,8 +236,8 @@
                 "RequiresCompatibilities": ["EC2"],
                 "Cpu": "256",
                 "Memory": "512",
-                "ExecutionRoleArn": { "Ref": "DownloadWorkerTaskExecutionRole" },
-                "TaskRoleArn": { "Ref": "DownloadWorkerTaskRole" },
+                "ExecutionRoleArn": { "Ref": "ECSTaskExecutionRole" },
+                "TaskRoleArn": { "Ref": "ECSTaskRole" },
                 "ContainerDefinitions": [
                     {
                         "Name": "download-worker",
@@ -236,9 +246,16 @@
                         "Environment": [
                             { "Name": "BUCKET_NAME", "Value": { "Ref": "S3Bucket" } },
                             { "Name": "AWS_REGION", "Value": { "Ref": "AWS::Region" } },
-                            { "Name": "DOWNLOAD_QUEUE_URL", "Value": { "Ref": "DownloadQueue" } },
-                            { "Name": "TRANSCRIPTION_QUEUE_URL", "Value": { "Ref": "TranscriptionQueue" } }
-                        ]
+                            { "Name": "DOWNLOAD_QUEUE_URL", "Value": { "Ref": "DownloadQueue" } }
+                        ],
+                        "LogConfiguration": {
+                            "LogDriver": "awslogs",
+                            "Options": {
+                                "awslogs-group": { "Ref": "DownloadWorkerLogGroup" },
+                                "awslogs-region": { "Ref": "AWS::Region" },
+                                "awslogs-stream-prefix": "ecs"
+                            }
+                        }
                     }
                 ]
             }
@@ -261,16 +278,16 @@
             "Properties": {
                 "LaunchTemplateName": "DownloadWorkerLaunchTemplate",
                 "LaunchTemplateData": {
-                    "InstanceType": "t3.micro",
+                    "InstanceType": "t2.micro",
                     "IamInstanceProfile": {
-                        "Name": { "Ref": "DownloadWorkerInstanceProfile" }
+                        "Name": { "Ref": "EC2InstanceProfile" }
                     },
                     "ImageId": {
                         "Fn::Sub": "{{resolve:ssm:/aws/service/ecs/optimized-ami/amazon-linux-2023/recommended/image_id}}"
                     },
                     "UserData": {
                         "Fn::Base64": {
-                            "Fn::Sub": "#!/bin/bash\necho ECS_CLUSTER=${DownloadWorkerCluster} >> /etc/ecs/ecs.config"
+                            "Fn::Sub": "#!/bin/bash\necho ECS_CLUSTER=${ECSCluster} >> /etc/ecs/ecs.config"
                         }
                     },
                     "InstanceMarketOptions": {
@@ -283,7 +300,7 @@
                 }
             }
         },
-        "DownloadWorkerInstanceRole": {
+        "EC2InstanceRole": {
             "Type": "AWS::IAM::Role",
             "Properties": {
                 "AssumeRolePolicyDocument": {
@@ -304,20 +321,104 @@
                 ]
             }
         },
-        "DownloadWorkerInstanceProfile": {
+        "EC2InstanceProfile": {
             "Type": "AWS::IAM::InstanceProfile",
             "Properties": {
-                "Roles": [{ "Ref": "DownloadWorkerInstanceRole" }]
+                "Roles": [{ "Ref": "EC2InstanceRole" }]
             }
         },
         "DownloadWorkerService": {
             "Type": "AWS::ECS::Service",
             "DependsOn": ["DownloadWorkerAutoScalingGroup"],
             "Properties": {
-                "Cluster": { "Ref": "DownloadWorkerCluster" },
+                "Cluster": { "Ref": "ECSCluster" },
                 "DesiredCount": 1,
                 "LaunchType": "EC2",
                 "TaskDefinition": { "Ref": "DownloadWorkerTaskDefinition" }
+            }
+        },
+        "TranscriptionLambdaLogGroup": {
+            "Type": "AWS::Logs::LogGroup",
+            "Properties": {
+                "LogGroupName": "/aws/lambda/transcription-lambda",
+                "RetentionInDays": 1
+            }
+        },
+        "TranscriptionLambdaExecutionRole": {
+            "Type": "AWS::IAM::Role",
+            "Properties": {
+                "RoleName": "transcription-lambda-execution-role",
+                "AssumeRolePolicyDocument": {
+                    "Version": "2012-10-17",
+                    "Statement": [
+                        {
+                            "Effect": "Allow",
+                            "Principal": {
+                                "Service": "lambda.amazonaws.com"
+                            },
+                            "Action": "sts:AssumeRole"
+                        }
+                    ]
+                },
+                "Policies": [
+                    {
+                        "PolicyName": "transcription-lambda-policy",
+                        "PolicyDocument": {
+                            "Version": "2012-10-17",
+                            "Statement": [
+                                {
+                                    "Effect": "Allow",
+                                    "Action": [
+                                        "logs:CreateLogGroup",
+                                        "logs:CreateLogStream",
+                                        "logs:PutLogEvents"
+                                    ],
+                                    "Resource": "arn:aws:logs:*:*:*"
+                                },
+                                {
+                                    "Effect": "Allow",
+                                    "Action": [
+                                        "s3:GetObject",
+                                        "s3:PutObject",
+                                        "s3:ListBucket"
+                                    ],
+                                    "Resource": [
+                                        { "Fn::Sub": "arn:aws:s3:::${S3Bucket}" },
+                                        { "Fn::Sub": "arn:aws:s3:::${S3Bucket}/*" }
+                                    ]
+                                }
+                            ]
+                        }
+                    }
+                ]
+            }
+        },
+        "TranscriptionLambdaFunction": {
+            "Type": "AWS::Lambda::Function",
+            "Properties": {
+                "FunctionName": "transcription-lambda",
+                "Role": { "Fn::GetAtt": [ "TranscriptionLambdaExecutionRole", "Arn" ] },
+                "PackageType": "Image",
+                "Code": { "ImageUri": { "Ref": "TranscriptionLambdaImage" } },
+                "Timeout": 900,
+                "MemorySize": 2048,
+                "Environment": {
+                    "Variables": {
+                        "WHISPER_MODEL_PATH": { "Ref": "WhisperModelPath" }
+                    }
+                },
+                "LoggingConfig": {
+                    "LogGroup": { "Ref": "TranscriptionLambdaLogGroup" }
+                }
+            }
+        },
+        "S3InvokeTranscriptionLambdaPermission": {
+            "Type": "AWS::Lambda::Permission",
+            "Properties": {
+                "FunctionName": { "Ref": "TranscriptionLambdaFunction" },
+                "Action": "lambda:InvokeFunction",
+                "Principal": "s3.amazonaws.com",
+                "SourceArn": { "Fn::Sub": "arn:aws:s3:::${S3Bucket}" }
             }
         }
     },
@@ -327,6 +428,10 @@
             "Value": {
                 "Fn::Sub": "https://${API}.execute-api.${AWS::Region}.amazonaws.com/prod/submit"
             }
+        },
+        "TranscriptionLambdaArn": {
+            "Description": "ARN of the transcription lambda function",
+            "Value": { "Fn::GetAtt": ["TranscriptionLambdaFunction", "Arn"] }
         }
     }
 }  

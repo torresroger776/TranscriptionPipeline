@@ -10,7 +10,6 @@ from urllib.parse import parse_qs, urlparse
 DOWNLOAD_DIR = "/tmp"
 SEGMENT_DURATION = 900
 BUCKET_NAME = os.environ["BUCKET_NAME"]
-TRANSCRIPTION_QUEUE_URL = os.environ["TRANSCRIPTION_QUEUE_URL"]
 REGION = os.environ["AWS_REGION"]
 
 s3 = boto3.client("s3", region_name=REGION)
@@ -23,8 +22,10 @@ def extract_video_id(url):
     return params.get("v", [None])[0]
 
 def download_audio(url, cookies_path=None):
+    # download audio only
+    # use cookies.txt for YouTube authentication
     ydl_opts = {
-        "format": "bestaudio[ext=m4a]/bestaudio",
+        "format": "bestaudio",
         "outtmpl": os.path.join(DOWNLOAD_DIR, "%(id)s.%(ext)s"),
         "concurrent_fragment_downloads": 5,
         "cookiefile": cookies_path if cookies_path and os.path.exists(cookies_path) else None,
@@ -33,22 +34,32 @@ def download_audio(url, cookies_path=None):
         "retries": 3,
         "fragment_retries": 3,
         "geo_bypass": True,
-        "nocheckcertificate": True
+        "nocheckcertificate": True,
+        "postprocessors": [
+            {
+                "key": "FFmpegExtractAudio",
+                "preferredcodec": "wav"
+            }
+        ]
     }
 
     with YoutubeDL(ydl_opts) as ydl:
         # download the audio file and return filename
         print(f"Downloading: {url}{' with cookies' if cookies_path and os.path.exists(cookies_path) else ''}")
         info = ydl.extract_info(url, download=True)
-        filename = ydl.prepare_filename(info)
+        filename = os.path.splitext(ydl.prepare_filename(info))[0] + ".wav"
         print(f"Downloaded: {url} to {filename}")
         return filename
 
-def split_audio(file_path, output_dir, base_name):
+def split_audio(file_path, base_name):
+    # prepare output directory for audio chunks
+    output_dir = os.path.join(DOWNLOAD_DIR, base_name)
     os.makedirs(output_dir, exist_ok=True)
-    output_pattern = os.path.join(output_dir, f"{base_name}_%03d.m4a")
 
-    # split audio file into segments using ffmpeg
+    # create consistent output pattern
+    output_pattern = os.path.join(output_dir, f"{base_name}_%03d.wav")
+
+    # split audio file into chunks using ffmpeg
     print(f"Splitting audio: {file_path}")
     subprocess.run([
         "ffmpeg",
@@ -59,25 +70,18 @@ def split_audio(file_path, output_dir, base_name):
         "-reset_timestamps", "1",
         output_pattern
     ], check=True)
-    print(f"Split audio into segments in: {output_dir}")
+    print(f"Split audio into chunks in: {output_dir}")
 
-def upload_and_notify_chunks(output_dir, video_id):
-    # loop through the files in the output directory and upload them to S3
-    for filename in sorted(os.listdir(output_dir)):
+    return output_dir
+
+def upload_chunks(output_dir, video_id):
+    # loop through the chunks in the output directory and upload them to S3
+    for filename in os.listdir(output_dir):
         file_path = os.path.join(output_dir, filename)
-        s3_key = f"raw/{video_id}/{filename}"
+        s3_key = f"audio/{video_id}/{filename}"
         print(f"Uploading {file_path} to s3://{BUCKET_NAME}/{s3_key}")
         s3.upload_file(file_path, BUCKET_NAME, s3_key)
-
-        # send message to SQS queue for transcription for each segment
-        print(f"Notifying transcription service for {s3_key}")
-        msg_body = json.dumps({
-            "video_id": video_id,
-            "filename": filename,
-            "s3_key": s3_key,
-            "bucket": BUCKET_NAME
-        })
-        sqs.send_message(QueueUrl=TRANSCRIPTION_QUEUE_URL, MessageBody=msg_body)
+        print(f"Uploaded {file_path} to s3://{BUCKET_NAME}/{s3_key}")
 
 def process_message(message):
     body = json.loads(message["Body"])
@@ -93,11 +97,19 @@ def process_message(message):
 
     try:
         print(f"Processing video: {video_id}")
+
+        # download audio and pass in the cookies.txt file in the same directory
         downloaded_file = download_audio(url, 'cookies.txt')
-        output_dir = os.path.join(DOWNLOAD_DIR, video_id)
-        split_audio(downloaded_file, output_dir, video_id)
-        os.remove(downloaded_file)
-        upload_and_notify_chunks(output_dir, video_id)
+
+        # split the audio into chunks
+        output_dir = split_audio(downloaded_file, video_id)
+
+        # upload chunks to S3
+        upload_chunks(output_dir, video_id)
+
+        # empty tmp directory
+        subprocess.run(["rm", "-rf", os.path.join(DOWNLOAD_DIR, "*")], check=True)
+        
         print(f"Finished processing video: {video_id}")
 
     except Exception as e:
@@ -129,7 +141,7 @@ def main():
                 )
 
         except Exception as e:
-            print(f"Error: {str(e)}")
+            print(f"Error polling for messages: {str(e)}")
             traceback.print_exc()
             time.sleep(5)
 
