@@ -2,13 +2,19 @@
 
 !cloudformation/
 !cloudformation/project_cf_template.json
+
+!docs/
+!docs/data-model.png
+
 !download_worker/
 !download_worker/download_worker.py
 !download_worker/requirements.txt
 !download_worker/Dockerfile
+
 !transcription_lambda
 !transcription_lambda/app.py
 !transcription_lambda/Dockerfile
+
 !.gitignore
 !README.md
 !setup.sh

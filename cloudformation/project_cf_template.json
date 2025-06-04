@@ -420,6 +420,37 @@
                 "Principal": "s3.amazonaws.com",
                 "SourceArn": { "Fn::Sub": "arn:aws:s3:::${S3Bucket}" }
             }
+        },
+        "RDSSecurityGroup": {
+            "Type": "AWS::EC2::SecurityGroup",
+            "Properties": {
+                "GroupDescription": "Allow access to RDS instance",
+                "SecurityGroupIngress": [
+                    {
+                        "IpProtocol": "tcp",
+                        "FromPort": 5432,
+                        "ToPort": 5432,
+                        "CidrIp": "0.0.0.0/0"
+                    }
+                ]
+            }
+        },
+        "PostgresDB": {
+            "Type": "AWS::RDS::DBInstance",
+            "Properties": {
+                "DBName": "transcriptiondb",
+                "DBInstanceIdentifier": "transcription-db",
+                "DBInstanceClass": "db.t3.micro",
+                "Engine": "postgres",
+                "MasterUsername": "dbadmin",
+                "MasterUserPassword": "dbadmin123",
+                "AllocatedStorage": 20,
+                "VPCSecurityGroups": [{ "Fn::GetAtt": ["RDSSecurityGroup", "GroupId"] }],
+                "BackupRetentionPeriod": 0,
+                "PubliclyAccessible": false,
+                "MultiAZ": false,
+                "EnableIAMDatabaseAuthentication": true
+            }
         }
     },
     "Outputs": {
@@ -434,4 +465,4 @@
             "Value": { "Fn::GetAtt": ["TranscriptionLambdaFunction", "Arn"] }
         }
     }
-}  
+}
