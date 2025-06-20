@@ -126,6 +126,51 @@ else
   echo "Transcription lambda image already exists"
 fi
 
+# download psycopg2 library for Lambdas
+if [ ! -d schema_init_lambda/psycopg2 ] || [ ! -d etl_lambda/psycopg2 ]; then
+  rm -rf schema_init_lambda/psycopg2* etl_lambda/psycopg2*
+
+  echo "Downloading psycopg2 library for AWS Lambda functions..."
+  TMP_PG_DIR=psycopg2_tmp
+  mkdir -p $TMP_PG_DIR
+  curl -sL -o $TMP_PG_DIR/psycopg2.zip "https://github.com/jkehler/awslambda-psycopg2/archive/refs/heads/master.zip"
+  unzip -q $TMP_PG_DIR/psycopg2.zip -d $TMP_PG_DIR
+
+  echo "Copying psycopg2 library files to Lambda directories..."
+  cp -r $TMP_PG_DIR/awslambda-psycopg2-master/psycopg2-3.11/* schema_init_lambda/
+  cp -r $TMP_PG_DIR/awslambda-psycopg2-master/psycopg2-3.11/* etl_lambda/
+
+  rm -rf $TMP_PG_DIR
+else
+  echo "psycopg2 library already exists in Lambda directories, skipping download"
+fi
+
+# package schema initialization Lambda function
+if [ ! -f schema_init_lambda.zip ]; then
+  echo "Packaging schema initialization Lambda function..."
+  cd schema_init_lambda
+  zip -r ../schema_init_lambda.zip .
+  cd ..
+
+  echo "Uploading schema initialization Lambda package to S3..."
+  aws s3 cp schema_init_lambda.zip s3://$BUCKET_NAME/lambda/schema_init_lambda.zip > /dev/null 2>&1
+else
+  echo "schema_init_lambda.zip already exists, skipping packaging"
+fi
+
+# package ETL Lambda function
+if [ ! -f etl_lambda.zip ]; then
+  echo "Packaging ETL Lambda function..."
+  cd etl_lambda
+  zip -r ../etl_lambda.zip .
+  cd ..
+
+  echo "Uploading ETL Lambda package to S3..."
+  aws s3 cp etl_lambda.zip s3://$BUCKET_NAME/lambda/etl_lambda.zip > /dev/null 2>&1
+else
+  echo "etl_lambda.zip already exists, skipping packaging"
+fi
+
 # find default subnet id
 DEFAULT_SUBNET_ID=$(aws ec2 describe-subnets \
   --filters "Name=default-for-az,Values=true" \
@@ -146,10 +191,14 @@ aws cloudformation deploy \
       SubnetId=$DEFAULT_SUBNET_ID \
       DownloadWorkerImage=$DOWNLOAD_REPOSITORY_URI:latest \
       TranscriptionLambdaImage=$TRANSCRIPTION_REPOSITORY_URI:latest \
-      WhisperModelPath=$WHISPER_MODEL_DIR/$WHISPER_MODEL_FILENAME
+      WhisperModelPath=$WHISPER_MODEL_DIR/$WHISPER_MODEL_FILENAME \
+      RDSDBName=${RDS_DB_NAME:-transcriptiondb} \
+      RDSDBInstanceIdentifier=${RDS_DB_INSTANCE_IDENTIFIER:-transcription_db} \
+      RDSMasterUsername=${RDS_MASTER_USERNAME:-dbadmin} \
+      RDSMasterUserPassword=${RDS_MASTER_USER_PASSWORD:-dbadmin123}
 
 # retrieve transcription Lambda ARN
-LAMBDA_ARN=$(aws cloudformation describe-stacks --stack-name $STACK_NAME \
+TRANSCRIPTION_LAMBDA_ARN=$(aws cloudformation describe-stacks --stack-name $STACK_NAME \
   --query "Stacks[0].Outputs[?OutputKey=='TranscriptionLambdaArn'].OutputValue" \
   --output text)
 
@@ -159,7 +208,7 @@ aws s3api put-bucket-notification-configuration \
   --notification-configuration '{
     "LambdaFunctionConfigurations": [
       {
-        "LambdaFunctionArn": "'"$LAMBDA_ARN"'",
+        "LambdaFunctionArn": "'"$TRANSCRIPTION_LAMBDA_ARN"'",
         "Events": ["s3:ObjectCreated:*"],
         "Filter": {
           "Key": {
@@ -178,6 +227,13 @@ aws s3api put-bucket-notification-configuration \
       }
     ]
   }'
+
+# invoke schema initialization Lambda function to create database schema
+echo "Invoking schema initialization Lambda function..."
+aws lambda invoke --function-name schema-init-lambda --payload '{}' response.json
+echo "Schema initialization response:"
+cat response.json
+rm response.json
 
 # store transcription API endpoint in .env
 API_INVOKE_URL=$(aws cloudformation describe-stacks --stack-name $STACK_NAME \

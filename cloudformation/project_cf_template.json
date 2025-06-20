@@ -19,6 +19,23 @@
         "WhisperModelPath": {
             "Type": "String",
             "Description": "Path to the Whisper model in transcription lambda directory"
+        },
+        "RDSDBName": {
+            "Type": "String",
+            "Description": "Name of the RDS database"
+        },
+        "RDSDBInstanceIdentifier": {
+            "Type": "String",
+            "Description": "Identifier for the RDS database instance"
+        },
+        "RDSMasterUsername": {
+            "Type": "String",
+            "Description": "Master username for the RDS instance"
+        },
+        "RDSMasterPassword": {
+            "Type": "String",
+            "Description": "Master password for the RDS instance",
+            "NoEcho": true
         }
     },
     "Resources": {
@@ -438,31 +455,195 @@
         "PostgresDB": {
             "Type": "AWS::RDS::DBInstance",
             "Properties": {
-                "DBName": "transcriptiondb",
-                "DBInstanceIdentifier": "transcription-db",
+                "DBName": { "Ref": "RDSDBName" },
+                "DBInstanceIdentifier": { "Ref": "RDSDBInstanceIdentifier" },
                 "DBInstanceClass": "db.t3.micro",
                 "Engine": "postgres",
-                "MasterUsername": "dbadmin",
-                "MasterUserPassword": "dbadmin123",
+                "MasterUsername": { "Ref": "RDSMasterUsername" },
+                "MasterUserPassword": { "Ref": "RDSMasterPassword" },
                 "AllocatedStorage": 20,
                 "VPCSecurityGroups": [{ "Fn::GetAtt": ["RDSSecurityGroup", "GroupId"] }],
                 "BackupRetentionPeriod": 0,
                 "PubliclyAccessible": false,
                 "MultiAZ": false,
                 "EnableIAMDatabaseAuthentication": true
+            },
+            "UpdateReplacePolicy": "Delete",
+            "DeletionPolicy": "Delete"
+        },
+        "PostgresDBIAMRole": {
+            "Type": "AWS::IAM::Role",
+            "Properties": {
+                "RoleName": "postgres-db-iam-auth-role",
+                "AssumeRolePolicyDocument": {
+                    "Version": "2012-10-17",
+                    "Statement": [
+                        {
+                            "Effect": "Allow",
+                            "Principal": {
+                                "Service": "lambda.amazonaws.com"
+                            },
+                            "Action": "sts:AssumeRole"
+                        }
+                    ]
+                },
+                "Policies": [
+                    {
+                        "PolicyName": "postgres-db-iam-auth-policy",
+                        "PolicyDocument": {
+                            "Version": "2012-10-17",
+                            "Statement": [
+                                {
+                                    "Effect": "Allow",
+                                    "Action": "rds-db:connect",
+                                    "Resource": {
+                                        "Fn::Sub": [
+                                            "arn:aws:rds-db:${AWS::Region}:${AWS::AccountId}:dbuser:${ResourceId}/dbadmin",
+                                            {
+                                                "ResourceId": { "Fn::GetAtt": ["PostgresDB", "DbiResourceId"] }
+                                            }
+                                        ]
+                                    }
+                                },
+                                {
+                                    "Effect": "Allow",
+                                    "Action": [
+                                        "rds:DescribeDBInstances",
+                                        "rds:GenerateDBAuthToken"
+                                    ],
+                                    "Resource": "*"
+                                },
+                                {
+                                    "Effect": "Allow",
+                                    "Action": [
+                                        "logs:CreateLogGroup",
+                                        "logs:CreateLogStream",
+                                        "logs:PutLogEvents"
+                                    ],
+                                    "Resource": "arn:aws:logs:*:*:*"
+                                },
+                                {
+                                    "Effect": "Allow",
+                                    "Action": [
+                                        "s3:GetObject",
+                                        "s3:ListBucket"
+                                    ],
+                                    "Resource": [
+                                        { "Fn::Sub": "arn:aws:s3:::${S3Bucket}" },
+                                        { "Fn::Sub": "arn:aws:s3:::${S3Bucket}/*" }
+                                    ]
+                                }
+                            ]
+                        }
+                    },
+                    {
+                        "PolicyName": "lambda-vpc-access-policy",
+                        "PolicyDocument": {
+                            "Version": "2012-10-17",
+                            "Statement": [
+                                {
+                                    "Effect": "Allow",
+                                    "Action": [
+                                        "ec2:CreateNetworkInterface",
+                                        "ec2:DescribeNetworkInterfaces",
+                                        "ec2:DeleteNetworkInterface"
+                                    ],
+                                    "Resource": "*"
+                                }
+                            ]
+                        }
+                    }
+                ]
+            }
+        },
+        "SchemaInitLambdaFunction": {
+            "Type": "AWS::Lambda::Function",
+            "Properties": {
+                "FunctionName": "schema-init-lambda",
+                "Role": { "Fn::GetAtt": [ "PostgresDBIAMRole", "Arn" ] },
+                "Handler": "schema_init.lambda_handler",
+                "Runtime": "python3.11",
+                "Code": {
+                    "S3Bucket": { "Ref": "S3Bucket" },
+                    "S3Key": "lambda/schema_init_lambda.zip"
+                },
+                "Timeout": 30,
+                "MemorySize": 256,
+                "Environment": {
+                    "Variables": {
+                        "DB_HOST": { "Fn::GetAtt": ["PostgresDB", "Endpoint.Address"] },
+                        "DB_NAME": { "Ref": "RDSDBName" },
+                        "DB_USER": { "Ref": "RDSMasterUsername" },
+                        "DB_PASSWORD": { "Ref": "RDSMasterPassword" }
+                    }
+                },
+                "LoggingConfig": {
+                    "LogGroup": { "Ref": "SchemaInitLambdaLogGroup" }
+                },
+                "VpcConfig": {
+                    "SubnetIds": [ { "Ref": "SubnetId" } ],
+                    "SecurityGroupIds": [ { "Fn::GetAtt": [ "RDSSecurityGroup", "GroupId" ] } ]
+                }
+            }
+        },
+        "SchemaInitLambdaLogGroup": {
+            "Type": "AWS::Logs::LogGroup",
+            "Properties": {
+                "LogGroupName": "/aws/lambda/schema-init-lambda",
+                "RetentionInDays": 1
+            }
+        },
+        "ETLLambdaFunction": {
+            "Type": "AWS::Lambda::Function",
+            "Properties": {
+                "FunctionName": "etl-lambda",
+                "Role": { "Fn::GetAtt": [ "PostgresDBIAMRole", "Arn" ] },
+                "Handler": "etl.lambda_handler",
+                "Runtime": "python3.11",
+                "Code": {
+                    "S3Bucket": { "Ref": "S3Bucket" },
+                    "S3Key": "lambda/etl_lambda.zip"
+                },
+                "Timeout": 30,
+                "MemorySize": 256,
+                "Environment": {
+                    "Variables": {
+                        "DB_HOST": { "Fn::GetAtt": ["PostgresDB", "Endpoint.Address"] },
+                        "DB_NAME": { "Ref": "RDSDBName" },
+                        "DB_USER": { "Ref": "RDSMasterUsername" }
+                    }
+                },
+                "LoggingConfig": {
+                    "LogGroup": { "Ref": "ETLLambdaLogGroup" }
+                },
+                "VpcConfig": {
+                    "SubnetIds": [ { "Ref": "SubnetId" } ],
+                    "SecurityGroupIds": [ { "Fn::GetAtt": [ "RDSSecurityGroup", "GroupId" ] } ]
+                }
+            }
+        },
+        "ETLLambdaLogGroup": {
+            "Type": "AWS::Logs::LogGroup",
+            "Properties": {
+                "LogGroupName": "/aws/lambda/etl-lambda",
+                "RetentionInDays": 1
             }
         }
     },
     "Outputs": {
         "APIInvokeURL": {
-            "Description": "Invoke this URL to submit a job",
+            "Description": "Invoke this URL to submit a transcription job",
             "Value": {
                 "Fn::Sub": "https://${API}.execute-api.${AWS::Region}.amazonaws.com/prod/submit"
             }
         },
         "TranscriptionLambdaArn": {
-            "Description": "ARN of the transcription lambda function",
+            "Description": "Transcription Lambda function ARN",
             "Value": { "Fn::GetAtt": ["TranscriptionLambdaFunction", "Arn"] }
+        },
+        "ETLLambdaArn": {
+            "Description": "ETL Lambda function ARN",
+            "Value": { "Fn::GetAtt": ["ETLLambdaFunction", "Arn"] }
         }
     }
 }
