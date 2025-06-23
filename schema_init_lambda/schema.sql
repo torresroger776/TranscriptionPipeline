@@ -1,17 +1,14 @@
-CREATE TABLE datetime_dim (
-    datetime_id SERIAL PRIMARY KEY,
-    datetime TIMESTAMPTZ NOT NULL,
+CREATE TABLE date_dim (
+    date_id SERIAL PRIMARY KEY,
     date DATE NOT NULL,
     year INT NOT NULL,
     month INT NOT NULL,
-    day INT NOT NULL,
-    hour INT NOT NULL,
-    minute INT NOT NULL
+    day INT NOT NULL
 );
 
 CREATE TABLE video_dim (
     video_sk SERIAL PRIMARY KEY,
-    datetime_id INT REFERENCES datetime_dim(datetime_id),
+    date_id INT REFERENCES date_dim(date_id),
     video_id VARCHAR(255) NOT NULL UNIQUE,
     video_title VARCHAR(255) NOT NULL,
     video_description TEXT,
@@ -33,4 +30,4 @@ CREATE INDEX text_fts_idx ON transcript_fact USING GIN(to_tsvector('english', te
 CREATE INDEX video_id_idx ON video_dim(video_id);
 CREATE INDEX channel_id_idx ON video_dim(channel_id);
 CREATE INDEX channel_tag_idx ON video_dim(channel_tag);
-CREATE INDEX datetime_idx ON datetime_dim(datetime);
+CREATE INDEX date_idx ON date_dim(date);
