@@ -49,7 +49,11 @@ def download_audio(url, cookies_path=None):
         info = ydl.extract_info(url, download=True)
         filename = os.path.splitext(ydl.prepare_filename(info))[0] + ".wav"
         print(f"Downloaded: {url} to {filename}")
-        return filename
+
+        # serialize metadata
+        metadata = json.dumps(info)
+
+        return filename, metadata
 
 def split_audio(file_path, base_name):
     # prepare output directory for audio chunks
@@ -74,7 +78,18 @@ def split_audio(file_path, base_name):
 
     return output_dir
 
-def upload_chunks(output_dir, video_id):
+def upload_chunks(output_dir, metadata, video_id):
+    # upload metadata file to S3
+    metadata_key = f"metadata/{video_id}.json"
+    print(f"Uploading metadata to s3://{BUCKET_NAME}/{metadata_key}")
+    s3.put_object(
+        Bucket=BUCKET_NAME,
+        Key=metadata_key,
+        Body=metadata,
+        ContentType='application/json'
+    )
+    print(f"Uploaded metadata to s3://{BUCKET_NAME}/{metadata_key}")
+
     # loop through the chunks in the output directory and upload them to S3
     for filename in os.listdir(output_dir):
         file_path = os.path.join(output_dir, filename)
@@ -99,13 +114,13 @@ def process_message(message):
         print(f"Processing video: {video_id}")
 
         # download audio and pass in the cookies.txt file in the same directory
-        downloaded_file = download_audio(url, 'cookies.txt')
+        downloaded_file, metadata = download_audio(url, 'cookies.txt')
 
         # split the audio into chunks
         output_dir = split_audio(downloaded_file, video_id)
 
-        # upload chunks to S3
-        upload_chunks(output_dir, video_id)
+        # upload chunks and metadata to S3
+        upload_chunks(output_dir, metadata, video_id)
 
         # empty tmp directory
         subprocess.run(["rm", "-rf", os.path.join(DOWNLOAD_DIR, "*")], check=True)

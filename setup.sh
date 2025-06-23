@@ -193,9 +193,9 @@ aws cloudformation deploy \
       TranscriptionLambdaImage=$TRANSCRIPTION_REPOSITORY_URI:latest \
       WhisperModelPath=$WHISPER_MODEL_DIR/$WHISPER_MODEL_FILENAME \
       RDSDBName=${RDS_DB_NAME:-transcriptiondb} \
-      RDSDBInstanceIdentifier=${RDS_DB_INSTANCE_IDENTIFIER:-transcription_db} \
+      RDSDBInstanceIdentifier=${RDS_DB_INSTANCE_IDENTIFIER:-transcription-db} \
       RDSMasterUsername=${RDS_MASTER_USERNAME:-dbadmin} \
-      RDSMasterUserPassword=${RDS_MASTER_USER_PASSWORD:-dbadmin123}
+      RDSMasterPassword=${RDS_MASTER_PASSWORD:-dbadmin123}
 
 # retrieve transcription Lambda ARN
 TRANSCRIPTION_LAMBDA_ARN=$(aws cloudformation describe-stacks --stack-name $STACK_NAME \
