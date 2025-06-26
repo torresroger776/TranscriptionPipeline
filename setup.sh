@@ -171,10 +171,22 @@ else
   echo "etl_lambda.zip already exists, skipping packaging"
 fi
 
+# find default VPC id
+DEFAULT_VPC_ID=$(aws ec2 describe-vpcs \
+  --filters "Name=isDefault,Values=true" \
+  --query "Vpcs[0].VpcId" \
+  --output text)
+
 # find default subnet id
 DEFAULT_SUBNET_ID=$(aws ec2 describe-subnets \
   --filters "Name=default-for-az,Values=true" \
   --query "Subnets[0].SubnetId" \
+  --output text)
+
+# find default subnet route table id
+DEFAULT_ROUTE_TABLE_ID=$(aws ec2 describe-route-tables \
+  --filters "Name=vpc-id,Values=$DEFAULT_VPC_ID" "Name=association.main,Values=true" \
+  --query "RouteTables[0].RouteTableId" \
   --output text)
 
 # CloudFormation parameters
@@ -188,9 +200,12 @@ aws cloudformation deploy \
   --capabilities CAPABILITY_NAMED_IAM \
   --parameter-overrides \
       S3Bucket=$BUCKET_NAME \
+      VpcId=$DEFAULT_VPC_ID \
       SubnetId=$DEFAULT_SUBNET_ID \
+      RouteTableId=$DEFAULT_ROUTE_TABLE_ID \
       DownloadWorkerImage=$DOWNLOAD_REPOSITORY_URI:latest \
       TranscriptionLambdaImage=$TRANSCRIPTION_REPOSITORY_URI:latest \
+      SegmentDuration=900 \
       WhisperModelPath=$WHISPER_MODEL_DIR/$WHISPER_MODEL_FILENAME \
       RDSDBName=${RDS_DB_NAME:-transcriptiondb} \
       RDSDBInstanceIdentifier=${RDS_DB_INSTANCE_IDENTIFIER:-transcription-db} \
@@ -202,7 +217,12 @@ TRANSCRIPTION_LAMBDA_ARN=$(aws cloudformation describe-stacks --stack-name $STAC
   --query "Stacks[0].Outputs[?OutputKey=='TranscriptionLambdaArn'].OutputValue" \
   --output text)
 
-# configure S3 event notification for .wav files in audio/ to invoke the Lambda function
+# retrieve ETL Lambda ARN
+ETL_LAMBDA_ARN=$(aws cloudformation describe-stacks --stack-name $STACK_NAME \
+  --query "Stacks[0].Outputs[?OutputKey=='ETLLambdaArn'].OutputValue" \
+  --output text)
+
+# configure S3 event notifications for transcription and ETL Lambdas
 aws s3api put-bucket-notification-configuration \
   --bucket $BUCKET_NAME \
   --notification-configuration '{
@@ -220,6 +240,24 @@ aws s3api put-bucket-notification-configuration \
               {
                 "Name": "suffix",
                 "Value": ".wav"
+              }
+            ]
+          }
+        }
+      },
+      {
+        "LambdaFunctionArn": "'"$ETL_LAMBDA_ARN"'",
+        "Events": ["s3:ObjectCreated:*"],
+        "Filter": {
+          "Key": {
+            "FilterRules": [
+              {
+                "Name": "prefix",
+                "Value": "transcripts/"
+              },
+              {
+                "Name": "suffix",
+                "Value": ".json"
               }
             ]
           }

@@ -13,11 +13,10 @@
 
 !etl_lambda/
 !etl_lambda/etl.py
-!etl_lambda/requirements.txt
+!etl_lambda/etl.sql
 
 !schema_init_lambda/
 !schema_init_lambda/schema_init.py
-!schema_init_lambda/requirements.txt
 !schema_init_lambda/schema.sql
 
 !transcription_lambda

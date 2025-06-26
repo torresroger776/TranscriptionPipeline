@@ -4,13 +4,25 @@
             "Type": "String",
             "Description": "The name of the S3 bucket to store files"
         },
+        "VpcId": {
+            "Type": "AWS::EC2::VPC::Id",
+            "Description": "VPC ID for project"
+        },
         "SubnetId": {
             "Type": "AWS::EC2::Subnet::Id",
             "Description": "Subnet ID for the ECS cluster"
         },
+        "RouteTableId": {
+            "Type": "String",
+            "Description": "Route Table ID for the subnet"
+        },
         "DownloadWorkerImage": {
             "Type": "String",
             "Description": "ECR image URL for the download worker"
+        },
+        "SegmentDuration": {
+            "Type": "Number",
+            "Description": "Maximum duration of each audio segment to transcribe (in seconds)"
         },
         "TranscriptionLambdaImage": {
             "Type": "String",
@@ -263,7 +275,8 @@
                         "Environment": [
                             { "Name": "BUCKET_NAME", "Value": { "Ref": "S3Bucket" } },
                             { "Name": "AWS_REGION", "Value": { "Ref": "AWS::Region" } },
-                            { "Name": "DOWNLOAD_QUEUE_URL", "Value": { "Ref": "DownloadQueue" } }
+                            { "Name": "DOWNLOAD_QUEUE_URL", "Value": { "Ref": "DownloadQueue" } },
+                            { "Name": "SEGMENT_DURATION", "Value": { "Ref": "SegmentDuration" } }
                         ],
                         "LogConfiguration": {
                             "LogDriver": "awslogs",
@@ -567,7 +580,7 @@
                     "S3Bucket": { "Ref": "S3Bucket" },
                     "S3Key": "lambda/schema_init_lambda.zip"
                 },
-                "Timeout": 30,
+                "Timeout": 60,
                 "MemorySize": 256,
                 "Environment": {
                     "Variables": {
@@ -593,6 +606,31 @@
                 "RetentionInDays": 1
             }
         },
+        "S3VpcEndpoint": {
+            "Type": "AWS::EC2::VPCEndpoint",
+            "Properties": {
+                "ServiceName": {
+                    "Fn::Sub": "com.amazonaws.${AWS::Region}.s3"
+                },
+                "VpcId": {
+                    "Ref": "VpcId"
+                },
+                "RouteTableIds": [
+                    { "Ref": "RouteTableId" }
+                ],
+                "PolicyDocument": {
+                    "Version": "2012-10-17",
+                    "Statement": [
+                        {
+                            "Effect": "Allow",
+                            "Principal": "*",
+                            "Action": "s3:*",
+                            "Resource": "*"
+                        }
+                    ]
+                }
+            }
+        },
         "ETLLambdaFunction": {
             "Type": "AWS::Lambda::Function",
             "Properties": {
@@ -604,13 +642,14 @@
                     "S3Bucket": { "Ref": "S3Bucket" },
                     "S3Key": "lambda/etl_lambda.zip"
                 },
-                "Timeout": 30,
+                "Timeout": 180,
                 "MemorySize": 256,
                 "Environment": {
                     "Variables": {
                         "DB_HOST": { "Fn::GetAtt": ["PostgresDB", "Endpoint.Address"] },
                         "DB_NAME": { "Ref": "RDSDBName" },
-                        "DB_USER": { "Ref": "RDSMasterUsername" }
+                        "DB_USER": { "Ref": "RDSMasterUsername" },
+                        "SEGMENT_DURATION": { "Ref": "SegmentDuration" }
                     }
                 },
                 "LoggingConfig": {
@@ -627,6 +666,15 @@
             "Properties": {
                 "LogGroupName": "/aws/lambda/etl-lambda",
                 "RetentionInDays": 1
+            }
+        },
+        "S3InvokeETLLambdaPermission": {
+            "Type": "AWS::Lambda::Permission",
+            "Properties": {
+                "FunctionName": { "Ref": "ETLLambdaFunction" },
+                "Action": "lambda:InvokeFunction",
+                "Principal": "s3.amazonaws.com",
+                "SourceArn": { "Fn::Sub": "arn:aws:s3:::${S3Bucket}" }
             }
         }
     },

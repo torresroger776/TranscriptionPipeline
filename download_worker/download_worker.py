@@ -8,7 +8,7 @@ from yt_dlp import YoutubeDL
 from urllib.parse import parse_qs, urlparse
 
 DOWNLOAD_DIR = "/tmp"
-SEGMENT_DURATION = 900
+SEGMENT_DURATION = os.environ["SEGMENT_DURATION"]
 BUCKET_NAME = os.environ["BUCKET_NAME"]
 REGION = os.environ["AWS_REGION"]
 
@@ -69,7 +69,7 @@ def split_audio(file_path, base_name):
         "ffmpeg",
         "-i", file_path,
         "-f", "segment",
-        "-segment_time", str(SEGMENT_DURATION),
+        "-segment_time", SEGMENT_DURATION,
         "-c", "copy",
         "-reset_timestamps", "1",
         output_pattern
