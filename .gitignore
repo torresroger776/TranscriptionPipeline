@@ -15,6 +15,10 @@
 !etl_lambda/etl.py
 !etl_lambda/etl.sql
 
+!query_lambda/
+!query_lambda/query.py
+!query_lambda/query.sql
+
 !schema_init_lambda/
 !schema_init_lambda/schema_init.py
 !schema_init_lambda/schema.sql
@@ -26,4 +30,5 @@
 !.gitignore
 !README.md
 !setup.sh
-!test.py
+!test_submit.py
+!test_query.py

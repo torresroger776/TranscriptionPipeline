@@ -101,7 +101,7 @@
                 }
             }
         },
-        "APIResource": {
+        "SubmitAPIResource": {
             "Type": "AWS::ApiGateway::Resource",
             "Properties": {
                 "RestApiId": { "Ref": "API" },
@@ -109,11 +109,19 @@
                 "PathPart": "submit"
             }
         },
-        "APIMethod": {
+        "QueryAPIResource": {
+            "Type": "AWS::ApiGateway::Resource",
+            "Properties": {
+                "RestApiId": { "Ref": "API" },
+                "ParentId": { "Fn::GetAtt": ["API", "RootResourceId"] },
+                "PathPart": "query"
+            }
+        },
+        "SubmitAPIMethod": {
             "Type": "AWS::ApiGateway::Method",
             "Properties": {
                 "RestApiId": { "Ref": "API" },
-                "ResourceId": { "Ref": "APIResource" },
+                "ResourceId": { "Ref": "SubmitAPIResource" },
                 "HttpMethod": "POST",
                 "AuthorizationType": "AWS_IAM",
                 "Integration": {
@@ -130,7 +138,7 @@
                     },
                     "RequestTemplates": {
                         "application/json": {
-                        "Fn::Sub": "Action=SendMessage&MessageBody=$util.urlEncode($input.body)"
+                            "Fn::Sub": "Action=SendMessage&MessageBody=$util.urlEncode($input.body)"
                         }
                     },
                     "PassthroughBehavior": "NEVER",
@@ -138,7 +146,7 @@
                         {
                             "StatusCode": "200",
                             "ResponseTemplates": {
-                                "application/json": "{ \"message\": \"Download job submitted successfully\" }"
+                                "application/json": "{ \"message\": \"Transcription job submitted successfully\" }"
                             }
                         },
                         {
@@ -170,9 +178,47 @@
                 ]
             }
         },
+        "QueryAPIMethod": {
+            "Type": "AWS::ApiGateway::Method",
+            "Properties": {
+                "RestApiId": { "Ref": "API" },
+                "ResourceId": { "Ref": "QueryAPIResource" },
+                "HttpMethod": "GET",
+                "AuthorizationType": "AWS_IAM",
+                "Integration": {
+                    "Type": "AWS_PROXY",
+                    "IntegrationHttpMethod": "POST",
+                    "Uri": {
+                        "Fn::Sub": "arn:aws:apigateway:${AWS::Region}:lambda:path/2015-03-31/functions/${QueryLambdaFunction.Arn}/invocations"
+                    }
+                },
+                "MethodResponses": [
+                    {
+                        "StatusCode": "200"
+                    },
+                    {
+                        "StatusCode": "400"
+                    },
+                    {
+                        "StatusCode": "500"
+                    }
+                ]
+            }
+        },
+        "APIGatewayInvokeQueryPermission": {
+            "Type": "AWS::Lambda::Permission",
+            "Properties": {
+                "FunctionName": { "Ref": "QueryLambdaFunction" },
+                "Action": "lambda:InvokeFunction",
+                "Principal": "apigateway.amazonaws.com",
+                "SourceArn": {
+                    "Fn::Sub": "arn:aws:execute-api:${AWS::Region}:${AWS::AccountId}:${API}/*/GET/query"
+                }
+            }
+        },
         "ApiDeployment": {
             "Type": "AWS::ApiGateway::Deployment",
-            "DependsOn": ["APIMethod"],
+            "DependsOn": ["SubmitAPIMethod", "QueryAPIMethod"],
             "Properties": {
                 "RestApiId": { "Ref": "API" },
                 "StageName": "prod"
@@ -676,13 +722,55 @@
                 "Principal": "s3.amazonaws.com",
                 "SourceArn": { "Fn::Sub": "arn:aws:s3:::${S3Bucket}" }
             }
+        },
+        "QueryLambdaFunction": {
+            "Type": "AWS::Lambda::Function",
+            "Properties": {
+                "FunctionName": "query-lambda",
+                "Role": { "Fn::GetAtt": [ "PostgresDBIAMRole", "Arn" ] },
+                "Handler": "query.lambda_handler",
+                "Runtime": "python3.11",
+                "Code": {
+                    "S3Bucket": { "Ref": "S3Bucket" },
+                    "S3Key": "lambda/query_lambda.zip"
+                },
+                "Timeout": 60,
+                "MemorySize": 256,
+                "Environment": {
+                    "Variables": {
+                        "DB_HOST": { "Fn::GetAtt": ["PostgresDB", "Endpoint.Address"] },
+                        "DB_NAME": { "Ref": "RDSDBName" },
+                        "DB_USER": { "Ref": "RDSMasterUsername" }
+                    }
+                },
+                "LoggingConfig": {
+                    "LogGroup": { "Ref": "QueryLambdaLogGroup" }
+                },
+                "VpcConfig": {
+                    "SubnetIds": [ { "Ref": "SubnetId" } ],
+                    "SecurityGroupIds": [ { "Fn::GetAtt": [ "RDSSecurityGroup", "GroupId" ] } ]
+                }
+            }
+        },
+        "QueryLambdaLogGroup": {
+            "Type": "AWS::Logs::LogGroup",
+            "Properties": {
+                "LogGroupName": "/aws/lambda/query-lambda",
+                "RetentionInDays": 1
+            }
         }
     },
     "Outputs": {
-        "APIInvokeURL": {
+        "SubmitAPIInvokeURL": {
             "Description": "Invoke this URL to submit a transcription job",
             "Value": {
                 "Fn::Sub": "https://${API}.execute-api.${AWS::Region}.amazonaws.com/prod/submit"
+            }
+        },
+        "QueryAPIInvokeURL": {
+            "Description": "Invoke this URL to query transcripts",
+            "Value": {
+                "Fn::Sub": "https://${API}.execute-api.${AWS::Region}.amazonaws.com/prod/query"
             }
         },
         "TranscriptionLambdaArn": {

@@ -19,10 +19,10 @@ auth = AWSSigV4(
 # get the url from user input
 url = input("Enter a YouTube video URL: ")
 
-# get the API invoke URL from environment variable
-invoke_url = os.getenv("API_INVOKE_URL")
+# get the submit API invoke URL from environment variable
+invoke_url = os.getenv("SUBMIT_API_INVOKE_URL")
 if invoke_url is None:
-    raise ValueError("API_INVOKE_URL environment variable is not set")
+    raise ValueError("SUBMIT_API_INVOKE_URL environment variable is not set")
 
 # make the API request
 response = requests.post(invoke_url, auth=auth, json={

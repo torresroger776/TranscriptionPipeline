@@ -127,8 +127,8 @@ else
 fi
 
 # download psycopg2 library for Lambdas
-if [ ! -d schema_init_lambda/psycopg2 ] || [ ! -d etl_lambda/psycopg2 ]; then
-  rm -rf schema_init_lambda/psycopg2* etl_lambda/psycopg2*
+if [ ! -d schema_init_lambda/psycopg2 ] || [ ! -d etl_lambda/psycopg2 ] || [ ! -d query_lambda/psycopg2 ]; then
+  rm -rf schema_init_lambda/psycopg2* etl_lambda/psycopg2* query_lambda/psycopg2*
 
   echo "Downloading psycopg2 library for AWS Lambda functions..."
   TMP_PG_DIR=psycopg2_tmp
@@ -139,6 +139,7 @@ if [ ! -d schema_init_lambda/psycopg2 ] || [ ! -d etl_lambda/psycopg2 ]; then
   echo "Copying psycopg2 library files to Lambda directories..."
   cp -r $TMP_PG_DIR/awslambda-psycopg2-master/psycopg2-3.11/* schema_init_lambda/
   cp -r $TMP_PG_DIR/awslambda-psycopg2-master/psycopg2-3.11/* etl_lambda/
+  cp -r $TMP_PG_DIR/awslambda-psycopg2-master/psycopg2-3.11/* query_lambda/
 
   rm -rf $TMP_PG_DIR
 else
@@ -169,6 +170,19 @@ if [ ! -f etl_lambda.zip ]; then
   aws s3 cp etl_lambda.zip s3://$BUCKET_NAME/lambda/etl_lambda.zip > /dev/null 2>&1
 else
   echo "etl_lambda.zip already exists, skipping packaging"
+fi
+
+# package query Lambda function
+if [ ! -f query_lambda.zip ]; then
+  echo "Packaging query Lambda function..."
+  cd query_lambda
+  zip -r ../query_lambda.zip .
+  cd ..
+
+  echo "Uploading query Lambda package to S3..."
+  aws s3 cp query_lambda.zip s3://$BUCKET_NAME/lambda/query_lambda.zip > /dev/null 2>&1
+else
+  echo "query_lambda.zip already exists, skipping packaging"
 fi
 
 # find default VPC id
@@ -274,12 +288,23 @@ cat response.json
 rm response.json
 
 # store transcription API endpoint in .env
-API_INVOKE_URL=$(aws cloudformation describe-stacks --stack-name $STACK_NAME \
-  --query "Stacks[0].Outputs[?OutputKey=='APIInvokeURL'].OutputValue" \
+SUBMIT_API_INVOKE_URL=$(aws cloudformation describe-stacks --stack-name $STACK_NAME \
+  --query "Stacks[0].Outputs[?OutputKey=='SubmitAPIInvokeURL'].OutputValue" \
   --output text)
 
-if grep -q '^API_INVOKE_URL=' .env; then
-  sed -i "s|^API_INVOKE_URL=.*|API_INVOKE_URL=$API_INVOKE_URL|" .env
+if grep -q '^SUBMIT_API_INVOKE_URL=' .env; then
+  sed -i "s|^SUBMIT_API_INVOKE_URL=.*|SUBMIT_API_INVOKE_URL=$SUBMIT_API_INVOKE_URL|" .env
 else
-  echo "API_INVOKE_URL=$API_INVOKE_URL" >> .env
+  echo "SUBMIT_API_INVOKE_URL=$SUBMIT_API_INVOKE_URL" >> .env
+fi
+
+# store query API endpoint in .env
+QUERY_API_INVOKE_URL=$(aws cloudformation describe-stacks --stack-name $STACK_NAME \
+  --query "Stacks[0].Outputs[?OutputKey=='QueryAPIInvokeURL'].OutputValue" \
+  --output text)
+
+if grep -q '^QUERY_API_INVOKE_URL=' .env; then
+  sed -i "s|^QUERY_API_INVOKE_URL=.*|QUERY_API_INVOKE_URL=$QUERY_API_INVOKE_URL|" .env
+else
+  echo "QUERY_API_INVOKE_URL=$QUERY_API_INVOKE_URL" >> .env
 fi

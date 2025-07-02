@@ -29,6 +29,7 @@ CREATE TABLE IF NOT EXISTS transcript_fact (
 
 CREATE INDEX IF NOT EXISTS text_fts_idx ON transcript_fact USING GIN(to_tsvector('english', text));
 CREATE INDEX IF NOT EXISTS video_id_idx ON video_dim(video_id);
+CREATE INDEX IF NOT EXISTS video_title_fts_idx ON video_dim USING GIN(to_tsvector('english', video_title));
 CREATE INDEX IF NOT EXISTS channel_id_idx ON video_dim(channel_id);
 CREATE INDEX IF NOT EXISTS channel_tag_idx ON video_dim(channel_tag);
 CREATE INDEX IF NOT EXISTS date_idx ON date_dim(date);
