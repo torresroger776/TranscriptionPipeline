@@ -81,7 +81,7 @@ def poll_for_transcript(video_id, platform_name, timeout, interval):
             return True
         time.sleep(interval)
         elapsed += interval
-    print(f"Error: Transcript operation timed out.")
+    print(f"Transcript polling timed out. Use yt-transcribe query to check status.")
     return False
 
 def run_query(args):
