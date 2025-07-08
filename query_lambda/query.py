@@ -21,15 +21,16 @@ def lambda_handler(event, context):
     }
 
     print("Checking if filters are valid")
-    channel_ok = "channel_id" in filters or "channel_tag" in filters
+    channel_video_ok = "channel_id" in filters or "channel_tag" in filters or "video_id" in filters
     platform_ok = "platform_name" in filters
-    keywords = keywords.strip() if keywords else None
 
-    if not (channel_ok and platform_ok and keywords):
+    if not (channel_video_ok and platform_ok) or keywords is None:
         return {
             "statusCode": 400,
-            "body": "Bad Request: Must provide 'channel_id' or 'channel_tag', 'platform_name', and 'q' (keywords)."
+            "body": "Bad Request: Must provide 'channel_id', 'channel_tag', or 'video_id'; 'platform_name'; and 'q' (keywords)."
         }
+
+    keywords = keywords.strip()
 
     for key, value in filters.items():
         if key in valid_filters:

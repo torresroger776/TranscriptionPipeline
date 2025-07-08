@@ -28,7 +28,9 @@
 !transcription_lambda/Dockerfile
 
 !.gitignore
+!cli.py
 !README.md
+!setup.py
 !setup.sh
 !test_submit.py
 !test_query.py
