@@ -26,7 +26,7 @@ This project demonstrates a scalable data pipeline that:
 * AWS ECS (download worker)
 * AWS S3 (audio segments, transcripts, metadata)
 * PostgreSQL RDS
-* Python + psycopg2 + requests-auth-aws-sigv4
+* Python (yt_dlp, boto3, psycopg2, etc.)
 * Infrastructure as Code: CloudFormation
 
 ---
