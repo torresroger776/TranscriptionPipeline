@@ -3,9 +3,6 @@
 !cloudformation/
 !cloudformation/project_cf_template.json
 
-!docs/
-!docs/data-model.png
-
 !download_worker/
 !download_worker/download_worker.py
 !download_worker/requirements.txt
@@ -32,5 +29,3 @@
 !README.md
 !setup.py
 !setup.sh
-!test_submit.py
-!test_query.py
