@@ -76,6 +76,7 @@ This project provides a single `setup.sh` script to automate the entire deployme
    - An AWS account with the required IAM permissions
    - Docker installed
    - AWS CLI configured (`aws configure`)
+- Note: You may need to add a `cookies.txt` file to the `download_worker` directory to bypass YouTube login restrictions. You can accomplish this by opening YouTube in an incognito tab and using the [Get cookies.txt LOCALLY](https://chromewebstore.google.com/detail/get-cookiestxt-locally/cclelndahbckbenkjhflpdbgdldlbecc) Chrome extension to generate the file in Netscape format. Once you close the incognito tab, you can be sure that the cookies will be unique and won't need refreshing.
 
 2. Clone this repo and run:
 
@@ -86,8 +87,9 @@ This project provides a single `setup.sh` script to automate the entire deployme
 
 3. When the script completes, your `.env` will contain:
 
-   - Your generated bucket name
+   - Your generated S3 bucket name
    - The submit and query API endpoints
+   - The DynamoDB status tracker table name
 
 ---
 
@@ -102,19 +104,19 @@ pip install -e .
 **Submit a video for transcription:**
 
 ```bash
-yt-transcribe submit --url "https://www.youtube.com/watch?v=abc123"
+transcribe submit --url "https://www.youtube.com/watch?v=abc123"
 ```
 
 **Query a channel for keywords:**
 
 ```bash
-yt-transcribe query --q "machine learning" --channel_tag "@MyChannel" --platform_name YouTube
+transcribe query --q "machine learning" --channel_tag "@MyChannel" --platform_name YouTube
 ```
 
 **Auto-transcribe if missing and then query:**
 
 ```bash
-yt-transcribe query --q "NLP" --channel_tag "@MyChannel" --platform_name YouTube --video_id abc123 --url "https://www.youtube.com/watch?v=abc123" --auto-transcribe
+transcribe query --q "NLP" --platform_name YouTube --video_id "abc123" --auto-transcribe
 ```
 
 ---
@@ -124,5 +126,3 @@ yt-transcribe query --q "NLP" --channel_tag "@MyChannel" --platform_name YouTube
 - Allow batch YouTube channel and playlist submission
 - Add support for other video platforms
 - Build a minimal web UI for end users
-- Use a job tracker for robust idempotency
-

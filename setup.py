@@ -1,7 +1,7 @@
 from setuptools import setup
 
 setup(
-    name='yt-transcribe',
+    name='transcribe',
     version='0.1',
     py_modules=['cli'],
     install_requires=[
@@ -12,7 +12,7 @@ setup(
     ],
     entry_points={
         'console_scripts': [
-            'yt-transcribe = cli:main',
+            'transcribe = cli:main',
         ],
     },
 )

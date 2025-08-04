@@ -27,7 +27,10 @@ def load_queries(path='etl.sql'):
             queries[current_key] = "\n".join(current_sql).strip()
     return queries
 
-s3 = boto3.client("s3")
+dynamodb = boto3.resource("dynamodb")
+jobs_table = dynamodb.Table(os.environ["JOBS_TABLE_NAME"])
+s3 = boto3.client("s3") 
+
 queries = load_queries()
 
 def lambda_handler(event, context):
@@ -96,25 +99,57 @@ def lambda_handler(event, context):
             video_sk = cur.fetchone()[0]
 
             print(f"Inserting transcript line facts...")
+            transcript_lines = []
             for line in transcript_data['transcription']:
                 start_time = line['offsets']['from'] // 1000 + segment_number * SEGMENT_DURATION
                 end_time = line['offsets']['to'] // 1000 + segment_number * SEGMENT_DURATION
                 text = line['text'].strip()
 
-                cur.execute(queries['insert_transcript_fact'], {
-                    'video_sk': video_sk,
-                    'start_time': start_time,
-                    'end_time': end_time,
-                    'text': text
-                })
+                transcript_lines.append((
+                    video_sk,
+                    start_time,
+                    end_time,
+                    text
+                ))
+            cur.executemany(queries['insert_transcript_fact'], transcript_lines)
+            print(f"Inserted {len(transcript_lines)} transcript lines for video: {metadata['id']}_{segment_number}" )
 
             conn.commit()
             cur.close()
             conn.close()
 
+            print(f"Successfully inserted data for video: {metadata['id']}_{segment_number}")
+
+            # update job status in DynamoDB
+            print(f"Updating job status for video: {metadata['id']}_{segment_number}")
+            response = jobs_table.update_item(
+                Key={"video_id":  metadata['id']},
+                UpdateExpression="SET segments_processed = segments_processed + :inc",
+                ExpressionAttributeValues={":inc": 1},
+                ReturnValues="ALL_NEW"
+            )
+            segments_processed = response['Attributes']['segments_processed']
+            segment_count = response['Attributes']['segment_count']
+
+            if segments_processed == segment_count:
+                jobs_table.update_item(
+                    Key={"video_id": metadata['id']},
+                    UpdateExpression="SET #s = :status",
+                    ExpressionAttributeNames={"#s": "status"},
+                    ExpressionAttributeValues={":status": "COMPLETED"}
+                )
+
             print(f"Successfully processed transcript: {transcript_key}")
-            return {"statusCode": 200, "body": f"Processed {transcript_key}"}
         
         except Exception as e:
+            jobs_table.update_item(
+                Key={"video_id": metadata['id']},
+                UpdateExpression="SET #s = :status",
+                ExpressionAttributeNames={"#s": "status"},
+                ExpressionAttributeValues={":status": "FAILED"}
+            )
+
             print(f"Error processing transcript {transcript_key}: {str(e)}")
             return {"statusCode": 500, "body": f"Error processing {transcript_key}: {str(e)}"}
+
+    return {"statusCode": 200, "body": "Success"}

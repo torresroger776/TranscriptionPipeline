@@ -4,6 +4,8 @@ import os
 import subprocess
 import traceback
 
+dynamodb = boto3.resource("dynamodb")
+jobs_table = dynamodb.Table(os.environ["JOBS_TABLE_NAME"])
 s3 = boto3.client("s3")
 
 MODEL_PATH = os.environ.get("WHISPER_MODEL_PATH", "models/ggml-tiny.en.bin")
@@ -54,6 +56,12 @@ def lambda_handler(event, context):
         }
     
     except subprocess.CalledProcessError as e:
+        jobs_table.update_item(
+            Key={"video_id": video_id},
+            UpdateExpression="SET #s = :status",
+            ExpressionAttributeNames={"#s": "status"},
+            ExpressionAttributeValues={":status": "FAILED"}
+        )
         print(f"Transcription process failed: {str(e)}")
         traceback.print_exc()
         return {
@@ -62,6 +70,12 @@ def lambda_handler(event, context):
         }
 
     except Exception as e:
+        jobs_table.update_item(
+            Key={"video_id": video_id},
+            UpdateExpression="SET #s = :status",
+            ExpressionAttributeNames={"#s": "status"},
+            ExpressionAttributeValues={":status": "FAILED"}
+        )
         print(f"Unexpected error: {str(e)}")
         traceback.print_exc()
         return {

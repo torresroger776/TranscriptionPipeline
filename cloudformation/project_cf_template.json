@@ -51,6 +51,28 @@
         }
     },
     "Resources": {
+        "VideoTranscriptionJobs": {
+            "Type": "AWS::DynamoDB::Table",
+            "Properties": {
+                "TableName": "VideoTranscriptionJobs",
+                "AttributeDefinitions": [
+                    {
+                        "AttributeName": "video_id",
+                        "AttributeType": "S"
+                    }
+                ],
+                "KeySchema": [
+                    {
+                        "AttributeName": "video_id",
+                        "KeyType": "HASH"
+                    }
+                ],
+                "BillingMode": "PAY_PER_REQUEST",
+                "SSESpecification": {
+                    "SSEEnabled": true
+                }
+            }
+        },
         "DownloadQueue": {
             "Type": "AWS::SQS::Queue",
             "Properties": {
@@ -290,6 +312,22 @@
                                     "Resource": [
                                         { "Fn::GetAtt": ["DownloadQueue", "Arn"] }
                                     ]
+                                },
+                                {
+                                    "Effect": "Allow",
+                                    "Action": "dynamodb:PutItem",
+                                    "Resource": {
+                                        "Fn::GetAtt": ["VideoTranscriptionJobs", "Arn"]
+                                    }
+                                },
+                                {
+                                    "Effect": "Allow",
+                                    "Action": [
+                                        "logs:CreateLogGroup",
+                                        "logs:CreateLogStream",
+                                        "logs:PutLogEvents"
+                                    ],
+                                    "Resource": "*"
                                 }
                             ]
                         }
@@ -322,7 +360,8 @@
                             { "Name": "BUCKET_NAME", "Value": { "Ref": "S3Bucket" } },
                             { "Name": "AWS_REGION", "Value": { "Ref": "AWS::Region" } },
                             { "Name": "DOWNLOAD_QUEUE_URL", "Value": { "Ref": "DownloadQueue" } },
-                            { "Name": "SEGMENT_DURATION", "Value": { "Ref": "SegmentDuration" } }
+                            { "Name": "SEGMENT_DURATION", "Value": { "Ref": "SegmentDuration" } },
+                            { "Name": "JOBS_TABLE_NAME", "Value": { "Ref": "VideoTranscriptionJobs" } }
                         ],
                         "LogConfiguration": {
                             "LogDriver": "awslogs",
@@ -462,6 +501,13 @@
                                         { "Fn::Sub": "arn:aws:s3:::${S3Bucket}" },
                                         { "Fn::Sub": "arn:aws:s3:::${S3Bucket}/*" }
                                     ]
+                                },
+                                {
+                                    "Effect": "Allow",
+                                    "Action": "dynamodb:UpdateItem",
+                                    "Resource": {
+                                        "Fn::GetAtt": ["VideoTranscriptionJobs", "Arn"]
+                                    }
                                 }
                             ]
                         }
@@ -480,7 +526,8 @@
                 "MemorySize": 2048,
                 "Environment": {
                     "Variables": {
-                        "WHISPER_MODEL_PATH": { "Ref": "WhisperModelPath" }
+                        "WHISPER_MODEL_PATH": { "Ref": "WhisperModelPath" },
+                        "JOBS_TABLE_NAME": { "Ref": "VideoTranscriptionJobs" }
                     }
                 },
                 "LoggingConfig": {
@@ -591,6 +638,13 @@
                                         { "Fn::Sub": "arn:aws:s3:::${S3Bucket}" },
                                         { "Fn::Sub": "arn:aws:s3:::${S3Bucket}/*" }
                                     ]
+                                },
+                                {
+                                    "Effect": "Allow",
+                                    "Action": "dynamodb:UpdateItem",
+                                    "Resource": {
+                                        "Fn::GetAtt": ["VideoTranscriptionJobs", "Arn"]
+                                    }
                                 }
                             ]
                         }
@@ -677,6 +731,31 @@
                 }
             }
         },
+        "DynamoDBVpcEndpoint": {
+            "Type": "AWS::EC2::VPCEndpoint",
+            "Properties": {
+                "ServiceName": {
+                    "Fn::Sub": "com.amazonaws.${AWS::Region}.dynamodb"
+                },
+                "VpcId": {
+                    "Ref": "VpcId"
+                },
+                "RouteTableIds": [
+                    { "Ref": "RouteTableId" }
+                ],
+                "PolicyDocument": {
+                    "Version": "2012-10-17",
+                    "Statement": [
+                        {
+                            "Effect": "Allow",
+                            "Principal": "*",
+                            "Action": "dynamodb:*",
+                            "Resource": "*"
+                        }
+                    ]
+                }
+            }
+        },
         "ETLLambdaFunction": {
             "Type": "AWS::Lambda::Function",
             "Properties": {
@@ -695,7 +774,8 @@
                         "DB_HOST": { "Fn::GetAtt": ["PostgresDB", "Endpoint.Address"] },
                         "DB_NAME": { "Ref": "RDSDBName" },
                         "DB_USER": { "Ref": "RDSMasterUsername" },
-                        "SEGMENT_DURATION": { "Ref": "SegmentDuration" }
+                        "SEGMENT_DURATION": { "Ref": "SegmentDuration" },
+                        "JOBS_TABLE_NAME": { "Ref": "VideoTranscriptionJobs" }
                     }
                 },
                 "LoggingConfig": {
@@ -761,6 +841,12 @@
         }
     },
     "Outputs": {
+        "VideoTranscriptionJobsTableName": {
+            "Description": "Name of the DynamoDB table for tracking transcription job statuses",
+            "Value": {
+                "Ref": "VideoTranscriptionJobs"
+            }
+        },
         "SubmitAPIInvokeURL": {
             "Description": "Invoke this URL to submit a transcription job",
             "Value": {

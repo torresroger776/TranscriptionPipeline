@@ -13,7 +13,7 @@ from urllib.parse import urlparse, parse_qs
 load_dotenv()
 
 POLL_TIMEOUT = int(os.getenv("POLL_TIMEOUT", 1800))
-POLL_INTERVAL = int(os.getenv("POLL_INTERVAL", 10))
+POLL_INTERVAL = int(os.getenv("POLL_INTERVAL", 30))
 
 # get AWS credentials
 session = boto3.Session()
@@ -24,6 +24,9 @@ auth = AWSSigV4(
     region=region,
     service='execute-api'
 )
+
+dynamodb = boto3.resource('dynamodb', region_name=region)
+jobs_table = dynamodb.Table(os.getenv("JOBS_TABLE_NAME"))
 
 def submit_video(url):
     submit_url = os.getenv("SUBMIT_API_INVOKE_URL")
@@ -72,16 +75,23 @@ def video_exists(video_id, platform_name):
         sys.exit(1)
     return len(resp.json()) > 0
 
-def poll_for_transcript(video_id, platform_name, timeout, interval):
+def poll_for_transcript(video_id, timeout, interval):
     print("Waiting for video transcription to complete...")
     elapsed = 0
     while elapsed < timeout:
-        if video_exists(video_id, platform_name):
-            print(f"Transcript ready after {elapsed} sec!")
-            return True
+        response = jobs_table.get_item(Key={"video_id": video_id})
+        item = response.get("Item")
+        if item:
+            status = item.get("status")
+            if status == "FAILED":
+                print(f"Video transcription for {video_id} failed. Try submitting again.")
+                return False
+            if status == "COMPLETED":
+                print(f"Transcript for video {video_id} is ready!")
+                return True
         time.sleep(interval)
         elapsed += interval
-    print(f"Transcript polling timed out. Use yt-transcribe query to check status.")
+    print(f"Transcript polling timed out. Use transcribe query to check status.")
     return False
 
 def run_query(args):
@@ -107,7 +117,6 @@ def run_query(args):
     if args.video_title:
         params["video_title"] = args.video_title
 
-    print(f"Running query: {params}")
     resp = requests.get(query_url, auth=auth, params=params)
     if resp.status_code != 200:
         print(f"Error running query: {resp.status_code} {resp.text}")
@@ -129,7 +138,6 @@ def run_query(args):
                 print("Text:", result["text"])
                 print("Date:", result["upload_date"])
                 print("Title:", result["video_title"])
-                print("Rank:", result.get("rank", "N/A"))
         else:
             print("No results found for the query.")
 
@@ -170,6 +178,13 @@ def extract_video_id(url):
     
     return video_id
 
+def build_url(video_id, platform_name):
+    if platform_name == "YouTube":
+        return f"https://www.youtube.com/watch?v={video_id}"
+    else:
+        print("Unsupported platform.")
+        sys.exit(1)
+
 def main():
     parser = argparse.ArgumentParser(description="Submit video transcription requests and query results.")
     
@@ -189,40 +204,37 @@ def main():
     query_parser.add_argument("--video_title", help="Filter by video title")
     query_parser.add_argument("--auto-transcribe", action="store_true", help="Automatically transcribe video if not found")
     query_parser.add_argument("--output", help="Output JSON file for query results")
-    query_parser.add_argument("--url", action="store_true", help="Pass in video URL for --auto-transcribe")
 
     args = parser.parse_args()
 
     if args.command == "submit":
-        if video_exists(extract_video_id(args.url), extract_platform_name(args.url)):
+        video_id = extract_video_id(args.url)
+        if video_exists(video_id, extract_platform_name(args.url)):
             print("Video already exists. No need to submit again.")
             sys.exit(0)
         
         submit_video(args.url)
 
+        if not poll_for_transcript(video_id, POLL_TIMEOUT, POLL_INTERVAL):
+            sys.exit(1)
+
     elif args.command == "query":
         channel = args.channel_tag or args.channel_id
         if not channel and not args.video_id:
-            print("One of channel_tag, channel_id, and video_id required for query command.")
+            print("One of channel_tag, channel_id, or video_id required for query command.")
             sys.exit(1)
         
         if channel and not channel_exists(channel, args.platform_name):
             print("Channel not found. Please submit a video first.")
             sys.exit(1)
 
+        # auto-transcribe if the video provided does not have a transcript
         if args.video_id and not video_exists(args.video_id, args.platform_name):
             if args.auto_transcribe:
-                if not args.url:
-                    print("--url is required for --auto-transcribe to submit the missing video.")
-                    sys.exit(1)
-
-                # validate URL
-                video_id = extract_video_id(args.url)
-
-                print("Submitting video for transcription...")
-                submit_video(args.url)
+                print(f"Submitting video {args.video_id} for transcription...")
+                submit_video(build_url(args.video_id, args.platform_name))
                 
-                if not poll_for_transcript(video_id, channel, args.platform_name, POLL_TIMEOUT, POLL_INTERVAL):
+                if not poll_for_transcript(args.video_id, POLL_TIMEOUT, POLL_INTERVAL):
                     sys.exit(1)
             else:
                 print("Video not found. Use --auto-transcribe or submit it first.")

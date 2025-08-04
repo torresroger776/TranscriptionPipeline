@@ -15,5 +15,5 @@ RETURNING video_sk;
 -- insert_transcript_fact
 INSERT INTO transcript_fact
 (video_sk, start_time, end_time, text)
-VALUES (%(video_sk)s, %(start_time)s, %(end_time)s, %(text)s)
+VALUES (%s, %s, %s, %s)
 ON CONFLICT ON CONSTRAINT video_and_time_unique DO NOTHING;
