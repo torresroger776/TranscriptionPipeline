@@ -8,7 +8,7 @@
 
 This project demonstrates a scalable data pipeline that:
 
-- Ingests YouTube videos on-demand using an ECS download worker
+- Ingests videos via URL on-demand using an ECS download worker
 - Splits audio into segments, stores them in S3, and triggers transcription
 - Transcribes audio with a Lambda function
 - Loads transcript data into a PostgreSQL RDS instance with full-text search capability
@@ -124,5 +124,6 @@ transcribe query --q "NLP" --platform_name YouTube --video_id "abc123" --auto-tr
 ## **Future Improvements**
 
 - Allow batch YouTube channel and playlist submission
-- Add support for other video platforms
+- Add support for other video platforms (currently YouTube only)
 - Build a minimal web UI for end users
+- Accept natural language prompting
