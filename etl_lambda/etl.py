@@ -33,6 +33,28 @@ s3 = boto3.client("s3")
 
 queries = load_queries()
 
+def decrement_batch_remaining(video_id):
+    try:
+        job_item = jobs_table.get_item(Key={"video_id": video_id}).get('Item')
+        batch_key = job_item.get('batch_key') if job_item else None
+        if batch_key:
+            batch_resp = jobs_table.update_item(
+                Key={"video_id": batch_key},
+                UpdateExpression="SET remaining = if_not_exists(remaining, :zero) - :one",
+                ExpressionAttributeValues={":one": 1, ":zero": 0},
+                ReturnValues="ALL_NEW"
+            )
+            remaining = batch_resp['Attributes'].get('remaining', 0)
+            if remaining <= 0:
+                jobs_table.update_item(
+                    Key={"video_id": batch_key},
+                    UpdateExpression="SET #s = :status",
+                    ExpressionAttributeNames={"#s": "status"},
+                    ExpressionAttributeValues={":status": "COMPLETED"}
+                )
+    except Exception:
+        pass
+
 def lambda_handler(event, context):
     for record in event['Records']:
         bucket = record['s3']['bucket']['name']
@@ -138,6 +160,8 @@ def lambda_handler(event, context):
                     ExpressionAttributeNames={"#s": "status"},
                     ExpressionAttributeValues={":status": "COMPLETED"}
                 )
+                
+                decrement_batch_remaining(metadata['id'])
 
             print(f"Successfully processed transcript: {transcript_key}")
         
@@ -148,6 +172,8 @@ def lambda_handler(event, context):
                 ExpressionAttributeNames={"#s": "status"},
                 ExpressionAttributeValues={":status": "FAILED"}
             )
+
+            decrement_batch_remaining(metadata['id'])
 
             print(f"Error processing transcript {transcript_key}: {str(e)}")
             return {"statusCode": 500, "body": f"Error processing {transcript_key}: {str(e)}"}

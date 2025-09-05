@@ -19,22 +19,21 @@ build_and_push_image() {
     local BUILD_DIR=$3
     local BUILD_ARGS=$4
 
-    if [ -z $(docker images -q $LOCAL_NAME:latest) ]; then
-        echo "Building Docker image: $LOCAL_NAME"
-        docker buildx build $BUILD_ARGS -t "$LOCAL_NAME" "$BUILD_DIR"
-        docker tag "$LOCAL_NAME:latest" "$REPO_URI:latest"
+    # build Docker image
+    echo "Building Docker image: $LOCAL_NAME"
+    docker buildx build $BUILD_ARGS -t "$LOCAL_NAME" "$BUILD_DIR"
+    docker tag "$LOCAL_NAME:latest" "$REPO_URI:latest"
 
-        echo "Deleting old images from $LOCAL_NAME ECR repository..."
-        OLD_IMAGES=$(aws ecr list-images --repository-name "$LOCAL_NAME" --query 'imageIds[*]' --output json)
-        if [ "$OLD_IMAGES" != "[]" ]; then
-            aws ecr batch-delete-image --repository-name "$LOCAL_NAME" --image-ids "$OLD_IMAGES" > /dev/null 2>&1
-        fi
-
-        echo "Pushing image to ECR: $REPO_URI"
-        docker push "$REPO_URI:latest"
-    else
-        echo "Docker image $LOCAL_NAME already exists, skipping build"
+    # delete old images from ECR repository
+    echo "Deleting old images from $LOCAL_NAME ECR repository..."
+    OLD_IMAGES=$(aws ecr list-images --repository-name "$LOCAL_NAME" --query 'imageIds[*]' --output json)
+    if [ "$OLD_IMAGES" != "[]" ]; then
+        aws ecr batch-delete-image --repository-name "$LOCAL_NAME" --image-ids "$OLD_IMAGES" > /dev/null 2>&1
     fi
+
+    # push image to ECR
+    echo "Pushing image to ECR: $REPO_URI"
+    docker push "$REPO_URI:latest"
 }
 
 package_and_upload_lambda() {
@@ -104,6 +103,9 @@ fi
 
 create_ecr_repo "$TRANSCRIPTION_REPO_NAME"
 build_and_push_image "$TRANSCRIPTION_REPO_NAME" "$TRANSCRIPTION_REPO_URI" transcription_lambda "--platform linux/amd64 --provenance=false"
+
+# prune Docker images
+docker image prune -f
 
 # download and prepare psycopg2 library for Lambdas
 if [ ! -d schema_init_lambda/psycopg2 ] || [ ! -d etl_lambda/psycopg2 ] || [ ! -d query_lambda/psycopg2 ]; then
@@ -178,7 +180,7 @@ aws lambda invoke --function-name schema-init-lambda --payload '{}' response.jso
 echo "Schema init Lambda response:"
 cat response.json && rm response.json
 
-# retrieve API invoke URLs and update .env file
+# retrieve CloudFormation stack outputs and update .env file
 SUBMIT_API_INVOKE_URL=$(aws cloudformation describe-stacks --stack-name $STACK_NAME \
   --query "Stacks[0].Outputs[?OutputKey=='SubmitAPIInvokeURL'].OutputValue" --output text)
 QUERY_API_INVOKE_URL=$(aws cloudformation describe-stacks --stack-name $STACK_NAME \

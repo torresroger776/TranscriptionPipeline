@@ -28,6 +28,21 @@ auth = AWSSigV4(
 dynamodb = boto3.resource('dynamodb', region_name=region)
 jobs_table = dynamodb.Table(os.getenv("JOBS_TABLE_NAME"))
 
+def extract_batch_key(url):
+    parsed = urlparse(url)
+    path = parsed.path or ""
+    query = parse_qs(parsed.query or "")
+
+    if 'list' in query and query['list']:
+        return query['list'][0]
+
+    parts = [p for p in path.split('/') if p]
+    if len(parts) >= 2 and parts[0] == 'channel':
+        return parts[1]
+    if len(parts) >= 1 and parts[0].startswith('@'):
+        return parts[0]
+    return url
+
 def submit_video(url):
     submit_url = os.getenv("SUBMIT_API_INVOKE_URL")
     if submit_url is None:
@@ -36,10 +51,62 @@ def submit_video(url):
 
     resp = requests.post(submit_url, auth=auth, json={"url": url})
     if resp.status_code == 200:
-        print(f"Video transcription request for {url} submitted successfully!")
+        print(f"Video transcription request for {url} submitted successfully")
     else:
         print(f"Video transcription request for {url} failed: {resp.status_code} {resp.text}")
         sys.exit(1)
+
+def submit_channel_or_playlist(url, max_videos=None):
+    submit_url = os.getenv("SUBMIT_API_INVOKE_URL")
+    if submit_url is None:
+        print("SUBMIT_API_INVOKE_URL environment variable is not set")
+        sys.exit(1)
+
+    if is_channel_url(url):
+        submission_type = "channel"
+    elif is_playlist_url(url):
+        submission_type = "playlist"
+    else:
+        print(f"URL {url} is not a valid channel or playlist URL")
+        sys.exit(1)
+
+    message_body = {
+        "url": url,
+        "type": submission_type
+    }
+    if max_videos is not None:
+        message_body["max_videos"] = max_videos
+
+    resp = requests.post(submit_url, auth=auth, json=message_body)
+    if resp.status_code == 200:
+        print(f"{submission_type.capitalize()} batch processing request for {url} submitted successfully")
+    else:
+        print(f"{submission_type.capitalize()} batch processing request for {url} failed: {resp.status_code} {resp.text}")
+        sys.exit(1)
+
+def is_channel_url(url):
+    if extract_platform_name(url) != "YouTube":
+        return False
+    
+    parsed = urlparse(url)
+    path = parsed.path
+
+    channel_patterns = [
+        r'^/channel/[^/]+(/.*)?$',
+        r'^/c/[^/]+(/.*)?$',
+        r'^/user/[^/]+(/.*)?$',
+        r'^/@[^/]+(/.*)?$'
+    ]
+    
+    return any(re.match(pattern, path) for pattern in channel_patterns)
+
+def is_playlist_url(url):
+    if extract_platform_name(url) != "YouTube":
+        return False
+    
+    parsed = urlparse(url)
+    query_params = parse_qs(parsed.query)
+    return 'list' in query_params
 
 def channel_exists(channel_id_or_tag, platform_name):
     query_url = os.getenv("QUERY_API_INVOKE_URL")
@@ -87,11 +154,30 @@ def poll_for_transcript(video_id, timeout, interval):
                 print(f"Video transcription for {video_id} failed. Try submitting again.")
                 return False
             if status == "COMPLETED":
-                print(f"Transcript for video {video_id} is ready!")
+                print(f"Transcript for video {video_id} is ready")
                 return True
         time.sleep(interval)
         elapsed += interval
     print(f"Transcript polling timed out. Use transcribe query to check status.")
+    return False
+
+def poll_for_batch(batch_key, timeout, interval):
+    print("Waiting for channel/playlist batch processing to complete...")
+    elapsed = 0
+    while elapsed < timeout:
+        response = jobs_table.get_item(Key={"video_id": batch_key})
+        item = response.get("Item")
+        if item:
+            status = item.get("status")
+            if status == "FAILED":
+                print("Batch processing failed. Try submitting again.")
+                return False
+            if status == "COMPLETED":
+                print("Batch processing completed")
+                return True
+        time.sleep(interval)
+        elapsed += interval
+    print("Batch polling timed out.")
     return False
 
 def run_query(args):
@@ -190,8 +276,12 @@ def main():
     
     subparsers = parser.add_subparsers(dest="command", required=True)
 
-    submit_parser = subparsers.add_parser("submit", help="Submit a video for transcription")
-    submit_parser.add_argument("--url", required=True, help="Video URL for submission")
+    submit_parser = subparsers.add_parser("submit", help="Submit a video, channel, or playlist for transcription")
+    submit_parser.add_argument("--url", required=True, help="Video, channel, or playlist URL for submission")
+    submit_parser.add_argument("--type", choices=["auto", "video", "channel", "playlist"], default="auto", 
+                              help="Type of submission (auto-detected if not specified)")
+    submit_parser.add_argument("--max-videos", type=int, default=None, help="Maximum number of videos to process for channel/playlist submissions")
+    submit_parser.add_argument("--wait", action="store_true", help="Wait for batch processing to complete for channel/playlist submissions")
     
     query_parser = subparsers.add_parser("query", help="Query video transcriptions")
     query_parser.add_argument("--q", required=True, help="Keywords for query")
@@ -208,15 +298,38 @@ def main():
     args = parser.parse_args()
 
     if args.command == "submit":
-        video_id = extract_video_id(args.url)
-        if video_exists(video_id, extract_platform_name(args.url)):
-            print("Video already exists. No need to submit again.")
-            sys.exit(0)
+        url = args.url
         
-        submit_video(args.url)
+        if args.type == "auto":
+            if is_channel_url(url):
+                submission_type = "channel"
+            elif is_playlist_url(url):
+                submission_type = "playlist"
+            elif extract_platform_name(url) == "YouTube":
+                submission_type = "video"
+            else:
+                print("Unsupported URL type. Please provide a valid YouTube video, channel, or playlist URL.")
+                sys.exit(1)
+        else:
+            submission_type = args.type
+        
+        if submission_type in ["channel", "playlist"]:
+            submit_channel_or_playlist(url, max_videos=args.max_videos)
+            
+            if args.wait:
+                batch_key = extract_batch_key(url)
+                if not poll_for_batch(batch_key, POLL_TIMEOUT, POLL_INTERVAL):
+                    sys.exit(1)
+        else:
+            video_id = extract_video_id(url)
+            if video_exists(video_id, extract_platform_name(url)):
+                print("Video already exists. No need to submit again.")
+                sys.exit(0)
+            
+            submit_video(url)
 
-        if not poll_for_transcript(video_id, POLL_TIMEOUT, POLL_INTERVAL):
-            sys.exit(1)
+            if not poll_for_transcript(video_id, POLL_TIMEOUT, POLL_INTERVAL):
+                sys.exit(1)
 
     elif args.command == "query":
         channel = args.channel_tag or args.channel_id

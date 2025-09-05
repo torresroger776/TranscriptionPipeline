@@ -315,7 +315,11 @@
                                 },
                                 {
                                     "Effect": "Allow",
-                                    "Action": "dynamodb:PutItem",
+                                    "Action": [
+                                        "dynamodb:PutItem",
+                                        "dynamodb:GetItem",
+                                        "dynamodb:UpdateItem"
+                                    ],
                                     "Resource": {
                                         "Fn::GetAtt": ["VideoTranscriptionJobs", "Arn"]
                                     }
@@ -504,7 +508,10 @@
                                 },
                                 {
                                     "Effect": "Allow",
-                                    "Action": "dynamodb:UpdateItem",
+                                    "Action": [
+                                        "dynamodb:UpdateItem",
+                                        "dynamodb:GetItem"
+                                    ],
                                     "Resource": {
                                         "Fn::GetAtt": ["VideoTranscriptionJobs", "Arn"]
                                     }
@@ -641,7 +648,10 @@
                                 },
                                 {
                                     "Effect": "Allow",
-                                    "Action": "dynamodb:UpdateItem",
+                                    "Action": [
+                                        "dynamodb:UpdateItem",
+                                        "dynamodb:GetItem"
+                                    ],
                                     "Resource": {
                                         "Fn::GetAtt": ["VideoTranscriptionJobs", "Arn"]
                                     }

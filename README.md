@@ -107,6 +107,12 @@ pip install -e .
 transcribe submit --url "https://www.youtube.com/watch?v=abc123"
 ```
 
+**Submit a channel for batch transcription:**
+
+```bash
+transcribe submit --url "https://www.youtube.com/@CHANNEL_ID"
+```
+
 **Query a channel for keywords:**
 
 ```bash
@@ -123,7 +129,6 @@ transcribe query --q "NLP" --platform_name YouTube --video_id "abc123" --auto-tr
 
 ## **Future Improvements**
 
-- Allow batch YouTube channel and playlist submission
 - Add support for other video platforms (currently YouTube only)
 - Build a minimal web UI for end users
 - Accept natural language prompting

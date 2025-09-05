@@ -11,6 +11,28 @@ s3 = boto3.client("s3")
 MODEL_PATH = os.environ.get("WHISPER_MODEL_PATH", "models/ggml-tiny.en.bin")
 OUTPUT_DIR = "/tmp"
 
+def decrement_batch_remaining(video_id):
+    try:
+        job_item = jobs_table.get_item(Key={"video_id": video_id}).get('Item')
+        batch_key = job_item.get('batch_key') if job_item else None
+        if batch_key:
+            batch_resp = jobs_table.update_item(
+                Key={"video_id": batch_key},
+                UpdateExpression="SET remaining = if_not_exists(remaining, :zero) - :one",
+                ExpressionAttributeValues={":one": 1, ":zero": 0},
+                ReturnValues="ALL_NEW"
+            )
+            remaining = batch_resp['Attributes'].get('remaining', 0)
+            if remaining <= 0:
+                jobs_table.update_item(
+                    Key={"video_id": batch_key},
+                    UpdateExpression="SET #s = :status",
+                    ExpressionAttributeNames={"#s": "status"},
+                    ExpressionAttributeValues={":status": "COMPLETED"}
+                )
+    except Exception:
+        pass
+
 def lambda_handler(event, context):
     print("Event received:", json.dumps(event))
 
@@ -24,7 +46,8 @@ def lambda_handler(event, context):
         bucket = s3_record["bucket"]["name"]
         key = s3_record["object"]["key"]
         filename = os.path.basename(key)
-        local_path = os.path.join("/tmp", filename)
+        local_path = os.path.join(OUTPUT_DIR, filename)
+        video_id = key.split('/')[1]
 
         # download the audio file from S3
         print(f"Downloading s3://{bucket}/{key} to {local_path}")
@@ -42,7 +65,9 @@ def lambda_handler(event, context):
         ]
         subprocess.run(command, check=True)
 
-        video_id = key.split('/')[1]
+        # delete the audio file
+        os.remove(local_path)
+
         output_json_path = f"{output_file_base}.json"
         s3_output_key = f"transcripts/{video_id}/{os.path.basename(output_json_path)}"
         
@@ -62,6 +87,7 @@ def lambda_handler(event, context):
             ExpressionAttributeNames={"#s": "status"},
             ExpressionAttributeValues={":status": "FAILED"}
         )
+        decrement_batch_remaining(video_id)
         print(f"Transcription process failed: {str(e)}")
         traceback.print_exc()
         return {
@@ -76,6 +102,7 @@ def lambda_handler(event, context):
             ExpressionAttributeNames={"#s": "status"},
             ExpressionAttributeValues={":status": "FAILED"}
         )
+        decrement_batch_remaining(video_id)
         print(f"Unexpected error: {str(e)}")
         traceback.print_exc()
         return {
